@@ -1,0 +1,59 @@
+SIMULATION: # pulling baseline - prd / all expand / all remediate simulation scenarios daily + actuals
+  simulation_scenario: 'baseline'
+  lookback_day_count: null # if start date and end date is given, then lookback_day_count is overwritten
+  start_date: '2025-10-05' # inclusive
+  end_date: '2025-10-11' # inclusive
+
+
+EXECUTION_DATA: # pulling unpadded dea / shutdown / backlog daily
+  lookback_day_count: null # if start date and end date is given, then lookback_day_count is overwritten
+  start_date: '2025-10-05' # inclusive
+  end_date: '2025-10-11' # inclusive
+
+
+PLANNING:
+  run_name: 'ogunes-dev'
+
+  expansion: True
+  remediation: False
+
+  lookback_day_count: null # if start date and end date is given, then lookback_day_count is overwritten
+  start_date: '2025-10-05' # inclusive
+  end_date: '2025-10-11' # inclusive
+
+  baseline_scenario: 'baseline' 
+  expansion_scenario: 'expansion'
+  remediation_scenario: 'remediation'
+
+  fc_switch_threshold: 0.1
+  ontrgd_target: 0.18
+  package_count_change_list: null
+
+
+EXECUTION:
+  run_name: 'ogunes-dev'
+
+  expansion: True
+  remediation: False
+
+  lookback_day_count: null # if start date and end date is given, then lookback_day_count is overwritten
+  start_date: '2025-10-05' # inclusive
+  end_date: '2025-10-11' # inclusive
+
+  baseline_scenario: 'baseline' 
+  expansion_scenario: 'expansion'
+  remediation_scenario: 'remediation'
+
+  dea_threshold: 0.9
+  dea_lookback_day_count: 3
+  package_count_change_list: [1000]
+  fc_switch_threshold: 0.1
+
+
+
+
+
+
+
+
+
