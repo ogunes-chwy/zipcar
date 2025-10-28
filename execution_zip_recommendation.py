@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import os
 from metric_helper import read_helper, calculate_package_distribution_change_by_groups
 import logging
@@ -14,6 +15,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def calculate_zip_volume_daily(
+        base_df
+):
+    """
+    Args:
+        base_df: Baseline simulation that run with prd Ship Map File.
+
+    Returns:
+        pd.DataFrame: DataFrame containing zip average daily volume
+        in selected time period
+    """
+    demand_by_zip = base_df\
+        .groupby(['zip5'])['shipment_tracking_number']\
+        .nunique()\
+        .reset_index()
+    demand_by_zip.columns = ['zip5','package_count']
+
+    date_count = len(base_df['order_placed_date'].drop_duplicates())
+    demand_by_zip['daily_package_count_avg'] = demand_by_zip['package_count'] / date_count
+    demand_by_zip = demand_by_zip[['zip5','daily_package_count_avg']]
+
+    return demand_by_zip
 
 
 def calculate_fc_carrier_switch(
@@ -89,6 +113,7 @@ def get_remediation_zips(
         dea_df,
         dea_threshold,
         dea_lookback_day_count,
+        zip_volume_floor= 25,
         fc_switch_th = None
 ):
     """
@@ -113,6 +138,14 @@ def get_remediation_zips(
         base_df,
         remediate_df
     )
+
+    # Calculate zip daily volume
+    zip_volume_daily = calculate_zip_volume_daily(
+        base_df
+    )
+    zip_volume_daily = zip_volume_daily.loc[
+        zip_volume_daily['daily_package_count_avg'] >= zip_volume_floor
+    ]
 
     # DEA rule for remediation
     max_date = pd.to_datetime(dea_df['delivery_date'].max())
@@ -157,7 +190,8 @@ def get_remediation_zips(
     # add other metrics then DEA
 
     # master table for zips to remediate
-    zips_to_remediate = fc_carrier_switch.merge(zips_to_remediate_dea, on='zip5')
+    zips_to_remediate = fc_carrier_switch.merge(zip_volume_daily, on='zip5')
+    zips_to_remediate = zips_to_remediate.merge(zips_to_remediate_dea, on='zip5')
 
     # apply additional constraint if any
     if fc_switch_th:
@@ -190,11 +224,11 @@ def get_expansion_zips(
         expand_df,
         baseline_scenario,
         expansion_scenario,
-        s,
-        e,
+        end_date,
         dea_df,
         dea_threshold,
         dea_lookback_day_count,
+        zip_volume_floor,
         fc_switch_th = None
 ):
     """
@@ -207,8 +241,7 @@ def get_expansion_zips(
                     prd Ship Map File (+) eligible ONTRGD.
         baseline_scenario: baseline scenario.
         expansion_scenario: expansion scenario.
-        s: simulation start date.
-        e: simulation end date.
+        end_date: simulation end date.
         dea_df: DataFrame that includes unpadded EDD DEA by 
                 delivery date, zip, fc, carrier.
         dea_threshold: unpadded EDD DEA threshold for ONTRGD remediation.
@@ -223,16 +256,16 @@ def get_expansion_zips(
     baseline_smf = read_helper(
         os.path.join('./data/smf', baseline_scenario),
         cols=['zip5','mode'],
-        start_date=s,
-        end_date=e,
+        start_date=end_date,
+        end_date=end_date,
         date_col_name='shipdate'
         )
 
     expand_smf = read_helper(
         os.path.join('./data/smf', expansion_scenario),
         cols=['zip5','mode'],
-        start_date=s,
-        end_date=e,
+        start_date=end_date,
+        end_date=end_date,
         date_col_name='shipdate'
         )
 
@@ -256,6 +289,14 @@ def get_expansion_zips(
         base_df,
         expand_df
     )
+
+    # Calculate zip daily volume
+    zip_volume_daily = calculate_zip_volume_daily(
+        base_df
+    )
+    zip_volume_daily = zip_volume_daily.loc[
+        zip_volume_daily['daily_package_count_avg'] >= zip_volume_floor
+    ]
 
     # DEA rule for expansion
     max_date = pd.to_datetime(dea_df['delivery_date'].max())
@@ -302,7 +343,8 @@ def get_expansion_zips(
     ['zip5','tnt_change']]
 
     # master table for zips to remediate
-    zips_to_expand = fc_carrier_switch.merge(zips_to_expand_dea, on='zip5')
+    zips_to_expand = fc_carrier_switch.merge(zip_volume_daily, on='zip5')
+    zips_to_expand = zips_to_expand.merge(zips_to_expand_dea, on='zip5')
     zips_to_expand = zips_to_expand.merge(zips_to_expand_tnt, on='zip5')
 
     # apply additional constraint if any
@@ -383,6 +425,7 @@ if __name__ == '__main__':
         config = yaml.safe_load(f)
 
     run_name = config['EXECUTION']['run_name']
+    run_date = '2025-10-12'
 
     expansion = config['EXECUTION']['expansion']
     remediation = config['EXECUTION']['remediation']
@@ -397,13 +440,16 @@ if __name__ == '__main__':
 
     dea_threshold = config['EXECUTION']['dea_threshold']
     dea_lookback_day_count = config['EXECUTION']['dea_lookback_day_count']
-    package_count_change_list = config['EXECUTION']['package_count_change_list']
+    carrier_switch_package_count_cap = config['EXECUTION']['carrier_switch_package_count_cap']
+    zip_volume_floor = config['EXECUTION']['zip_volume_floor']
+    fc_switch_threshold = config['EXECUTION']['fc_switch_threshold']
+    fc_charge_change_allowance = config['EXECUTION']['fc_charge_change_allowance']
 
 
     if start_date and end_date:
         pass
     else:
-        end_date = date.today()
+        end_date = date.today() - timedelta(days=1)
         start_date = end_date - timedelta(days=lookback_day_count)
         end_date = end_date.strftime('%Y-%m-%d')
         start_date = start_date.strftime('%Y-%m-%d')
@@ -486,7 +532,9 @@ if __name__ == '__main__':
             remediate_sim_df,
             dea_df,
             dea_threshold,
-            dea_lookback_day_count
+            dea_lookback_day_count,
+            zip_volume_floor,
+            fc_switch_threshold
         )
 
     if expansion:
@@ -510,17 +558,21 @@ if __name__ == '__main__':
             expand_df=expand_sim_df,
             baseline_scenario=baseline_scenario,
             expansion_scenario=expansion_scenario,
-            s=start_date,
-            e=end_date,
+            end_date=end_date,
             dea_df=dea_df,
             dea_threshold=dea_threshold,
-            dea_lookback_day_count=dea_lookback_day_count
+            dea_lookback_day_count=dea_lookback_day_count,
+            zip_volume_floor=zip_volume_floor,
+            fc_switch_th=fc_switch_threshold
         )
 
 
+    package_count_change_list = []
+    package_count_change_list.append(carrier_switch_package_count_cap)
+
     for pc in package_count_change_list:
 
-        print('PACKAGE COUNT SWITCH', pc)
+        print('PACKAGE COUNT SWITCH TARGET', pc)
         baseline_sim_df_no_change = baseline_sim_df.copy()
 
         if remediation:
@@ -529,7 +581,7 @@ if __name__ == '__main__':
                 remediate_sim_df,
                 zips_to_remediate,
                 pc)
-            print('remediated zip count: ', remediate_zips_temp.shape)
+            print('remediated zip count: ', remediate_zips_temp.shape[0])
 
             baseline_sim_df_no_change = baseline_sim_df_no_change.merge(
                 remediate_zips_temp,
@@ -550,7 +602,7 @@ if __name__ == '__main__':
                 expand_sim_df,
                 zips_to_expand,
                 pc)
-            print('expanded zip count: ', expand_zips_temp.shape)
+            print('expanded zip count: ', expand_zips_temp.shape[0])
 
             baseline_sim_df_no_change = baseline_sim_df_no_change.merge(
                 expand_zips_temp,
@@ -601,7 +653,6 @@ if __name__ == '__main__':
         # calculate & print all metrics
 
         print('BEFORE WMS PROXY')
-        #  before WMS proxy
         # check network level ONTRGD % (point estimate) before WMS proxy
         # rule 1
         carrier_change = calculate_package_distribution_change_by_groups(
@@ -613,3 +664,69 @@ if __name__ == '__main__':
             'nunique'
             )
         print(carrier_change)
+
+        # check fc charge changes for stop condition
+        # rule 2
+        fc_charge_change = calculate_package_distribution_change_by_groups(
+            baseline_sim_df.rename(
+                columns={'base_fc_name': 'sim_fc_name'}, inplace=False),
+            final_sim_df,
+            ['sim_fc_name'],
+            'shipment_tracking_number',
+            'nunique')
+        print(fc_charge_change)
+
+        if any(x > fc_charge_change_allowance for x in abs(fc_charge_change['abs_percent_change'])):
+            logger.info('Decreasing carrier switch package count allowance ...')
+
+            package_count_change_list.append(pc*3/4)
+
+        else:
+            logger.info('Saving ...')
+
+            # Save output
+            s_d = final_sim_df['order_placed_date'].min()
+            e_d = final_sim_df['order_placed_date'].max()
+
+            r_target = np.round(carrier_change.loc[
+                carrier_change['sim_carrier_code'] == 'ONTRGD',
+                'iter_percent'].item(),1)
+
+
+            if not os.path.exists('./results/execution' + f'/{run_name}/{run_date}/simulation'):
+                os.makedirs('./results/execution' + f'/{run_name}/{run_date}/simulation')
+
+            final_sim_df.to_parquet(
+                os.path.join('./results/execution',
+                            run_name,
+                            run_date,
+                            'simulation',
+                            f'{s_d}_{e_d}_dea_th_{dea_threshold}_fc_switch_{fc_switch_threshold}_carrier_switch_pc_{pc}.parquet'
+                            )
+                )
+
+            if not os.path.exists('./results/execution' + f'/{run_name}/{run_date}/zips_to_expand'):
+                os.makedirs('./results/execution' + f'/{run_name}/{run_date}/zips_to_expand')
+
+            if expansion:
+                expand_zips_temp.to_parquet(
+                    os.path.join('./results/execution',
+                                run_name,
+                                run_date,
+                                'zips_to_expand',
+                                f'{s_d}_{e_d}_dea_th_{dea_threshold}_fc_switch_{fc_switch_threshold}_carrier_switch_pc_{pc}.parquet'
+                                )
+                )
+
+            if not os.path.exists('./results/execution' + f'/{run_name}/{run_date}/zips_to_remediate'):
+                os.makedirs('./results/execution' + f'/{run_name}/{run_date}/zips_to_remediate')
+
+            if remediation:
+                remediate_zips_temp.to_parquet(
+                    os.path.join('./results/execution',
+                                run_name,
+                                run_date,
+                                'zips_to_remediate',
+                                f'{s_d}_{e_d}_dea_th_{dea_threshold}_fc_switch_{fc_switch_threshold}_carrier_switch_pc_{pc}.parquet'
+                                )
+                )

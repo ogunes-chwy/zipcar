@@ -473,7 +473,7 @@ if __name__ == '__main__':
     if start_date and end_date:
         pass
     else:
-        end_date = date.today()
+        end_date = date.today() - timedelta(days=1)
         start_date = end_date - timedelta(days=lookback_day_count)
         end_date = end_date.strftime('%Y-%m-%d')
         start_date = start_date.strftime('%Y-%m-%d')
