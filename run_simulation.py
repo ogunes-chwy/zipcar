@@ -76,8 +76,6 @@ def generate_ship_map_file(
         partition_cols='shipdate',
         existing_data_behavior='delete_matching'
         )
-    # df.to_parquet(os.path.join(output_path, scenario, s, 'smf.parquet'))
-    # df.to_parquet(os.path.join(output_path, scenario, f'dates_{s}_{e}.parquet'))
 
     logger.info('SMF table created and saved.')
 
@@ -122,8 +120,8 @@ def simulation(
     """
     logger.info('running simulation...')
 
-    if not os.path.exists(output_path + f'/{scenario}/{dt}'):
-        os.makedirs(output_path + f'/{scenario}/{dt}')
+    if not os.path.exists(output_path + f'/{scenario}'):
+        os.makedirs(output_path + f'/{scenario}')
 
     df = execute_query_and_return_formatted_data(
         query_name='run_simulation',
@@ -135,8 +133,6 @@ def simulation(
         partition_cols='order_placed_date',
         existing_data_behavior='delete_matching'
         )
-    # df.to_parquet(os.path.join(output_path, scenario, dt, 'simulation.parquet'))
-    # df.to_parquet(os.path.join(output_path, scenario, f'dates_{s}_{e}.parquet'))
 
     logger.info('simulation run finished...')
 

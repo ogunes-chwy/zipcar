@@ -15,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def generate_unpadded_dea(
+def get_unpadded_dea(
         output_path,
         s,
         e
@@ -49,6 +49,40 @@ def generate_unpadded_dea(
     logger.info('Unpadded DEA table created and saved.')
 
 
+def get_backlog(
+        output_path,
+        s,
+        e
+        ):
+    """
+    Query to get Backlog data from Snowflake. 
+
+    Args:
+        output_path: Main folder of Backlog output in Local.
+        s: Start date.
+        e: End date.
+    """
+    logger.info('pulling backlog...')
+
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+
+    df = execute_query_and_return_formatted_data(
+        query_path='./data',
+        query_name='backlog',
+        start_date=s,
+        end_date=e,
+        convert_to_lowercase=True)
+
+    df.to_parquet(
+        os.path.join(output_path),
+        partition_cols='date',
+        existing_data_behavior='delete_matching'
+        )
+
+    logger.info('backlog table created and saved.')
+
+
 if __name__ == '__main__':
 
     with open("./configs.yaml") as f:
@@ -68,8 +102,15 @@ if __name__ == '__main__':
 
     logger.info('Running for %s - %s ...', start_date, end_date)
 
-    generate_unpadded_dea(
+    get_unpadded_dea(
         './data/execution_data/unpadded_dea',
         s=start_date,
         e=end_date
         )
+
+    get_backlog(
+        './data/execution_data/backlog',
+        s=start_date,
+        e=end_date
+        )
+

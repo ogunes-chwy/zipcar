@@ -2,15 +2,25 @@ import pandas as pd
 import numpy as np
 from snowflake_utils import execute_query_and_return_formatted_data
 import os
+import logging
+
+
+# Get a logger instance
+logging.basicConfig(
+    level=logging.INFO,  # Set the minimum logging level
+    format='%(asctime)s - %(levelname)s - %(message)s', # Define the log message format
+    datefmt='%Y-%m-%d %H:%M:%S' # Define the timestamp format
+)
+logger = logging.getLogger(__name__)
 
 
 # read helper
 def read_helper(
         path,
-        cols,
         start_date,
         end_date,
         date_col_name = 'order_placed_date',
+        cols = None,
         col_names = None):
     """
     Args:
@@ -27,16 +37,27 @@ def read_helper(
     df = pd.DataFrame()
 
     date_list = pd.date_range(start=start_date, end=end_date, freq='D')
+
     for dt in date_list:
+
         dt = dt.strftime("%Y-%m-%d")
-        df_temp = pd.read_parquet(os.path.join(path, f'{date_col_name}={dt}'))
-        df_temp[date_col_name] = dt
-        df_temp = df_temp[cols]
+        path_temp = os.path.join(path, f'{date_col_name}={dt}')
 
-        if col_names:
-            df_temp.columns = col_names
+        if os.path.exists(path_temp):
 
-        df = pd.concat([df,df_temp])
+            df_temp = pd.read_parquet(path_temp)
+            df_temp[date_col_name] = dt
+
+            if cols:
+                df_temp = df_temp[cols]
+
+            if col_names:
+                df_temp.columns = col_names
+
+            df = pd.concat([df,df_temp])
+
+        else:
+            logger.info('%s does not exist', path_temp)
 
     return df
 

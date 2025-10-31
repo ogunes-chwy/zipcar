@@ -5,7 +5,7 @@ CREATE TABLE edldb_dev.sc_promise_sandbox.simulation_smf (
     ,ZIP5 varchar (5)
     ,MODE varchar (20)
     ,ROUTEID varchar (20)
-    ,ZONE varchar (5)
+    ,ZONE integer
     ,CUTOFF varchar (10)
     ,TNT integer
     ,ADJTNT integer

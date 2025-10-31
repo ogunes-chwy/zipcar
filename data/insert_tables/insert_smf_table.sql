@@ -1,35 +1,6 @@
 -- baseline OR remediation
 
--- old way of creating SMF
-
-/*
 INSERT INTO edldb_dev.sc_promise_sandbox.simulation_smf
-select
-        shipdate,
-        fcname,
-        zip5,
-        mode,
-        routeid,
-        zone,
-        cutoff,
-        tnt,
-        adjtnt,
-        nextadjtnt
-from 
-    edldb.sc_promise_sandbox.ship_map_file
-where 
-    mode in ('FDXHD','ONTRGD') -- 'FDXHD','ONTRGD'
-    and fcname in ('AVP1','AVP2','CFC1','CLT1',
-                       'DAY1','DFW1','MCI1',
-                       'MCO1','MDT1','PHX1','RNO1',
-                       'BNA1','HOU1')
-    and shipdate >= {start_date}
-    and shipdate <= {end_date};
-*/
-
-
--- new way of creating SMF
-
 with base as (
 
     select 
@@ -52,7 +23,7 @@ with base as (
                 'CLT1','MCO1','MCI1','DAY1',
                 'CFC1','PHX1','RNO1','DFW1',
                 'HOU1')
-        and mode in ('FDXHD','ONTRGD')
+        and mode in ('FDXHD','ONTRGD') -- 'FDXHD','ONTRGD'
         and orsitemtype = 'N'
         and ship_date >= {start_date}
         and ship_date <= {end_date}
@@ -98,7 +69,7 @@ with base as (
         ,mode
         ,routeid
         ,zone
-        ,case when cutoff >= 240000 then LPAD(cutoff - 240000,6,'0') else LPAD(cutoff,6,'0') end as cutoff
+        ,case when cutoff >= 240000 then LPAD(cast(cutoff - 240000 as varchar(10)),6,'0') else LPAD(cast(cutoff as varchar(10)),6,'0') end as cutoff
         ,tnt
         ,adjtnt
         ,nextadjtnt
@@ -182,5 +153,6 @@ with base as (
         from
             ontrgd_eligible_smf)
     )
-    */
+    
     ;
+*/

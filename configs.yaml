@@ -14,8 +14,8 @@ EXECUTION_DATA: # pulling unpadded dea / shutdown / backlog daily
 EXECUTION:
   run_name: 'ogunes-dev'
 
-  expansion: True
-  remediation: False
+  expansion: False
+  remediation: True
 
   lookback_day_count: null # if start date and end date is given, then lookback_day_count is overwritten
   start_date: '2025-10-05' # inclusive
@@ -27,9 +27,12 @@ EXECUTION:
 
   carrier_switch_package_count_cap: 1000
   fc_charge_change_allowance: 0.2
-  
+
   dea_threshold: 0.9
   dea_lookback_day_count: 3
+
+  backlog_threshold: 0.5
+
   zip_volume_floor: 25
   fc_switch_threshold: 0.1
 
