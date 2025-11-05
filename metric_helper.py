@@ -218,11 +218,11 @@ def calculate_execution_metrics():
 
 if __name__ == '__main__':
 
-    baseline_scenario = 'baseline'
+    baseline_scenario = 'remediation'
     iteration_scenario = 'remediation'
 
     df_b = read_helper(
-        os.path.join('./data/simulations', iteration_scenario),
+        os.path.join('./data/simulations', baseline_scenario),
         cols=[
             'order_id',
             'order_placed_date',

@@ -1,5 +1,5 @@
 SIMULATION: # pulling baseline - prd / all expand / all remediate simulation scenarios daily + actuals
-  simulation_scenario: 'baseline'
+  simulation_scenario: ['baseline', 'remediation', 'expansion']
   lookback_day_count: null # if start date and end date is given, then lookback_day_count is overwritten
   start_date: '2025-10-05' # inclusive
   end_date: '2025-10-11' # inclusive
@@ -12,9 +12,9 @@ EXECUTION_DATA: # pulling unpadded dea / shutdown / backlog daily
 
 
 EXECUTION:
-  run_name: 'ogunes-dev'
+  run_name: 'default'
 
-  expansion: False
+  expansion: True
   remediation: True
 
   lookback_day_count: null # if start date and end date is given, then lookback_day_count is overwritten
@@ -25,16 +25,15 @@ EXECUTION:
   expansion_scenario: 'expansion'
   remediation_scenario: 'remediation'
 
-  carrier_switch_package_count_cap: 1000
-  fc_charge_change_allowance: 0.2
+  recommendation_count_list: [500,  300, 200, 100, 50]
+  zip_volume_floor: 25
+  fc_switch_threshold: 0.15
 
   dea_threshold: 0.9
-  dea_lookback_day_count: 3
+  dea_lookback_day_count: 7
 
   backlog_threshold: 0.5
-
-  zip_volume_floor: 25
-  fc_switch_threshold: 0.1
+  clear_date_threshold: 1
 
 
 PLANNING:

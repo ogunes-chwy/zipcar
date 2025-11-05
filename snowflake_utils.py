@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from typing import Optional
 from snowflake.connector import connect
+import sqlparse
 
 # Snowflake connection settings
 connection_settings = {
@@ -63,7 +64,7 @@ def execute_query_and_return_formatted_data(
             query_to_execute = query_file.read()
     else:
         raise ValueError("Either `query` or both `query_name` and `query_path` must be provided.")
-    
+
     if start_date and end_date:
         start_date = "'" + start_date + "'"
         query_to_execute = query_to_execute.replace('{start_date}', start_date)
@@ -138,3 +139,61 @@ def execute_query(
     with connect(**connection_settings) as connection:
         cursor = connection.cursor()
         cursor.execute(query_to_execute)
+
+
+def execute_multiple_query_and_return_formatted_data(
+    query: Optional[str] = None,
+    query_name: Optional[str] = None,
+    query_path: Optional[str] = None,
+    date_col: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    convert_to_lowercase: bool = True
+) -> pd.DataFrame:
+    """
+    Executes multiple Snowflake queries and returns the formatted data as a DataFrame. Optionally converts column names to
+    lowercase and sets the date column as datetime.
+
+    Args:
+        query_name (str, optional): The name of the SQL query file (without extension). Defaults to None, in which case
+                                    the query is assumed to be provided directly in the `query` parameter.
+        date_col (str, optional): The name of the column containing date data. If provided, the column is converted
+                                  to datetime format. Defaults to None.
+        query_path (str, optional): The path to the directory containing the SQL query file.
+        convert_to_lowercase (bool, optional): Whether to convert column names to lowercase. Defaults to True.
+
+    Returns:
+        pd.DataFrame: The DataFrame containing the results of the executed query.
+    """
+    if query:
+        query_to_execute = query
+    elif query_name and query_path:
+        with open(f"{query_path}/{query_name}.sql", "r") as query_file:
+            query_to_execute = query_file.read()
+    else:
+        raise ValueError("Either `query` or both `query_name` and `query_path` must be provided.")
+
+    if start_date and end_date:
+        start_date = "'" + start_date + "'"
+        query_to_execute = query_to_execute.replace('{start_date}', start_date)
+        end_date = "'" + end_date + "'"
+        query_to_execute = query_to_execute.replace('{end_date}', end_date)
+
+    stmts = [s.strip() for s in sqlparse.split(query_to_execute) if s.strip()]
+    df = None
+
+    connection = connect(**connection_settings)
+    cs = connection.cursor()
+
+    for stmt in stmts:
+        cur = cs.execute(stmt)
+        if cur.description:
+            rows = cur.fetchall()
+            cols = [c[0] for c in cur.description]
+            df = pd.DataFrame(rows, columns=cols)
+            if convert_to_lowercase:
+                df.columns = [col.lower() for col in df.columns]
+            if date_col:
+                df[date_col] = pd.to_datetime(df[date_col])
+
+    return df
