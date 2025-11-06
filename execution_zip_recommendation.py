@@ -480,6 +480,8 @@ def determine_final_decision(row):
     curr = row.get('current_recommendation')
     last = row.get('last_recommendation')
     last_dea = row.get('last_reason_dea')
+    last_shutdown = row.get('last_reason_shutdown')
+    last_backlog = row.get('last_reason_backlog')
     curr_dea = row.get('current_reason_dea')
     curr_shutdown = row.get('current_reason_shutdown')
     curr_backlog = row.get('current_reason_backlog')
@@ -488,11 +490,27 @@ def determine_final_decision(row):
     # If status is 1 and last is deactivate, then make last None
     if status == 0 and last == 'activate':
         last = None
+        last_dea = None
+        last_shutdown = None
+        last_backlog = None
     elif status == 1 and last == 'deactivate':
         last = None
+        last_dea = None
+        last_shutdown = None
+        last_backlog = None
 
     # If deactivated due to dea before, keep it deactivated
     if last in ['deactivate'] and last_dea == 'deactivate':
+        return pd.Series({
+            'final_recommendation': None,
+            'final_reason_dea': None,
+            'final_reason_shutdown': None,
+            'final_reason_backlog': None
+        })
+
+    # If last decision was a switchback to usual
+    if last in ['activate','deactivate'] \
+        and last_dea == 'ok' and last_shutdown == 'ok' and last_backlog == 'ok':
         return pd.Series({
             'final_recommendation': None,
             'final_reason_dea': None,
@@ -523,14 +541,6 @@ def determine_final_decision(row):
             'final_reason_dea': 'ok',
             'final_reason_shutdown': 'ok',
             'final_reason_backlog': 'ok'
-        })
-    # If last recommendation is null (never seen before), use current decision/reason
-    elif curr == 'ok' and pd.isnull(last):
-        return pd.Series({
-            'final_recommendation': None,
-            'final_reason_dea': None,
-            'final_reason_shutdown': None,
-            'final_reason_backlog': None
         })
     # Otherwise, also use current decision/reasons (safe fallback)
     else:
@@ -729,8 +739,8 @@ def get_zip_recommendation(
     zips_to_recommend_remediate = zips_to_recommend_remediate[cols + ['priority_score']]
     zips_to_recommend_expand = zips_to_recommend_expand[cols + ['priority_score']]
 
-    zips_to_recommend_remediate.to_parquet('./archieve/zips_to_recommend_remediate.parquet')
-    zips_to_recommend_expand.to_parquet('./archieve/zips_to_recommend_expand.parquet')
+    # zips_to_recommend_remediate.to_parquet('./archieve/zips_to_recommend_remediate.parquet')
+    # zips_to_recommend_expand.to_parquet('./archieve/zips_to_recommend_expand.parquet')
 
     return zips_to_recommend_remediate, zips_to_recommend_expand
 
@@ -782,7 +792,7 @@ if __name__ == '__main__':
     with open("./configs.yaml") as f:
         config = yaml.safe_load(f)
 
-    RUN_DATE = '2025-10-12' # today().strftime('%Y-%m-%d')
+    RUN_DATE = '2025-10-11' # today().strftime('%Y-%m-%d')
     RUN_NAME = config['EXECUTION']['run_name']
 
     expansion = config['EXECUTION']['expansion']
@@ -809,7 +819,7 @@ if __name__ == '__main__':
     # set output paths
     output_path = os.path.join('./results/execution', RUN_NAME)
     metrics_path = os.path.join(output_path, 'metrics', RUN_DATE)
-    sim_path = os.path.join(output_path, 'simulation', RUN_DATE)
+    sim_path = os.path.join(output_path, 'simulation_output', RUN_DATE)
     remediation_path = os.path.join(output_path, 'zips_to_remediate', RUN_DATE)
     expansion_path = os.path.join(output_path, 'zips_to_expand', RUN_DATE)
 
