@@ -21,7 +21,7 @@ with base as (
     select distinct
             'FedEx' as carrier,
             LPAD(zipcode, 5, '0') as zip5,
-            master_term as dest_facility_num,
+            cast(right(cast(master_term as varchar),3) as int) as dest_facility_num,
             snapshot_date,
             row_number() over (partition by zipcode order by snapshot_date desc) as rn_fdx
             --max(snapshot_date) over (
