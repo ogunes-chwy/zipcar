@@ -169,7 +169,7 @@ def calculate_package_distribution_by_groups(
 def apply_wms_proxy(
         df,
         wms_query
-):
+    ):
     """
         Args:
             df: simulation DataFrame.
@@ -218,11 +218,8 @@ def calculate_execution_metrics():
 
 if __name__ == '__main__':
 
-    baseline_scenario = 'remediation'
-    iteration_scenario = 'remediation'
-
     df_b = read_helper(
-        os.path.join('./data/simulations', baseline_scenario),
+        os.path.join('./data/simulations', 'baseline'),
         cols=[
             'order_id',
             'order_placed_date',
@@ -244,53 +241,19 @@ if __name__ == '__main__':
         end_date='2025-10-11'
     )
 
-    """
-    df_i = read_simulation(
-        os.path.join('./data/simulations', iteration_scenario),
-        cols=[
-            'order_id',
-            'order_placed_date',
-            'shipment_tracking_number',
-            'units',
-            'zip5',
-            'sim_fc_name',
-            'sim_carrier_code',
-            'sim_route',
-            'sim_tnt',
-            'sim_transit_cost',
-            'act_fc_name',
-            'act_carrier_code',
-            'act_route',
-            'act_transit_cost',
-            'std',
-            'dea_flag'],
-        start_date='2025-10-05',
-        end_date='2025-10-11'
-    )
-    """
+    o1 = calculate_package_distribution_by_groups(df_b,
+                                                ['sim_carrier_code'],
+                                                'shipment_tracking_number',
+                                                'nunique'
+                                                )
 
-    o = calculate_package_distribution_by_groups(df_b,
-                                                        ['sim_carrier_code'],
-                                                        'shipment_tracking_number',
-                                                        'nunique'
-                                                        )
-    
-    """
-    o = calculate_package_distribution_change_by_groups(df_b,
-                                                        df_i,
-                                                        ['sim_carrier_code'],
-                                                        'shipment_tracking_number',
-                                                        'nunique'
-                                                        )
-    """
-    #df_b = apply_wms_proxy(df_b,'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_0925_v2;')
-    #df_i = apply_wms_proxy(df_i,'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_0925_v2;')
-    """
-    o = calculate_package_distribution_change_by_groups(df_b,
-                                                        df_i,
-                                                        ['carrier'],
-                                                        'package_count',
-                                                        'sum')
-    """
-    print(o)
+    df_b = apply_wms_proxy(df_b,'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1030;')
+
+    o2 = calculate_package_distribution_by_groups(df_b,
+                                                ['sim_carrier_code'],
+                                                'shipment_tracking_number',
+                                                'nunique'
+                                                )
+
+    print(o1,o2)
 

@@ -4,7 +4,11 @@ from datetime import date, timedelta
 import pandas as pd
 import yaml
 from sklearn.preprocessing import MinMaxScaler
-from metric_helper import read_helper, calculate_package_distribution_change_by_groups, apply_wms_proxy
+from metric_helper import (
+    read_helper,
+    calculate_package_distribution_change_by_groups,
+    apply_wms_proxy,
+    calculate_cost_change)
 
 # pylint: disable=abstract-class-instantiated
 
@@ -20,25 +24,35 @@ logger = logging.getLogger(__name__)
 def get_zip_status(
         smf_baseline_df,
         smf_expansion_df,
-        date
+        check_date
     ):
     """
+    Determine zip code status (active/inactive) based on SMF data.
+
     Args:
         smf_baseline_df: DataFrame containing baseline SMF.
         smf_expansion_df: DataFrame containing expansion SMF.
-        date: Date to check zip status.
+        check_date: Date to check zip status.
+
     Returns:
-        pd.DataFrame: DataFrame containing zip status.
+        pd.DataFrame: DataFrame containing zip status with 'active' column (1=active, 0=inactive).
     """
+    # Get active zips from baseline (ONTRGD mode on check_date)
     smf_baseline_df = smf_baseline_df.loc[
-        smf_baseline_df['mode'] == 'ONTRGD',
-        ['zip5']].drop_duplicates()
+        (smf_baseline_df['mode'] == 'ONTRGD')
+        & (smf_baseline_df['shipdate'] == check_date),
+        ['zip5']
+    ].drop_duplicates()
     smf_baseline_df['active'] = 1
 
+    # Get all eligible zips from expansion (ONTRGD mode on check_date)
     smf_expansion_df = smf_expansion_df.loc[
-        smf_expansion_df['mode'] == 'ONTRGD',
-        ['zip5']].drop_duplicates()
+        (smf_expansion_df['mode'] == 'ONTRGD')
+        & (smf_expansion_df['shipdate'] == check_date),
+        ['zip5']
+    ].drop_duplicates()
 
+    # Merge to determine active status
     eligible_ontrgd = smf_expansion_df.merge(
         smf_baseline_df,
         on='zip5',
@@ -54,34 +68,36 @@ def get_last_recommendation(
         run_date,
         dea_threshold,
         fc_switch_threshold,
-        zc=999999
+        zip_count=999999
     ):
     """
+    Retrieve previous zip recommendations from remediation and expansion directories.
+
     Args:
         run_name: Name of the run.
         run_date: Date of the run.
         dea_threshold: DEA threshold.
         fc_switch_threshold: FC switch threshold.
-        zc: Zip count.
+        zip_count: Zip count (default: 999999).
     
     Returns:
         pd.DataFrame: DataFrame containing previous zips to remediate and expand.
     """
-
     recommendation_path = os.path.join('./results/execution', run_name)
     run_date_dt = pd.to_datetime(run_date)
     start_date_dt = run_date_dt - timedelta(days=30)
+
     prev_zip_recommendation = pd.DataFrame(
         columns=['zip5', 'last_recommendation', 'recommendation_date',
                 'last_reason_dea', 'last_reason_shutdown', 'last_reason_backlog']
     )
-    filename = f'dea_th_{dea_threshold}_fc_switch_{fc_switch_threshold}_rec_count_{zc}.parquet'
+    filename = f'dea_th_{dea_threshold}_fc_switch_{fc_switch_threshold}_rec_count_{zip_count}.parquet'
     output_cols = ['zip5', 'last_recommendation', 'recommendation_date',
                    'last_reason_dea', 'last_reason_shutdown', 'last_reason_backlog']
     input_cols = ['zip5', 'final_recommendation', 'recommendation_date',
                   'final_reason_dea', 'final_reason_shutdown', 'final_reason_backlog']
 
-    # read previous zips from both remediation and expansion directories
+    # Read previous zips from both remediation and expansion directories
     for directory in ['zips_to_remediate', 'zips_to_expand']:
         directory_path = os.path.join(recommendation_path, directory)
 
@@ -132,298 +148,455 @@ def get_last_recommendation(
                 [prev_zip_recommendation, prev_zips], ignore_index=True
             )
 
-        except Exception as e:
+        except (OSError, ValueError, KeyError) as e:
             logger.error("Error reading previous recommendations from %s: %s", directory, e)
 
     return prev_zip_recommendation
 
 
-def calculate_zip_volume_daily(
-        base_df
-    ):
+def calculate_zip_volume_daily(baseline_sim_df):
     """
+    Calculate average daily package volume per zip code.
+
     Args:
-        base_df: Baseline simulation that run with prd Ship Map File.
+        baseline_sim_df: Baseline simulation that run with prd Ship Map File.
 
     Returns:
-        pd.DataFrame: DataFrame containing zip average daily volume
-        in selected time period
+        pd.DataFrame: DataFrame containing zip average daily volume in selected time period.
     """
-    demand_by_zip = base_df\
-        .groupby(['zip5'])['shipment_tracking_number']\
-        .nunique()\
-        .reset_index()
-    demand_by_zip.columns = ['zip5','package_count']
+    demand_by_zip = baseline_sim_df.groupby(['zip5'])['shipment_tracking_number'].nunique().reset_index()
+    demand_by_zip.columns = ['zip5', 'package_count']
 
-    date_count = len(base_df['order_placed_date'].drop_duplicates())
+    date_count = len(baseline_sim_df['order_placed_date'].drop_duplicates())
     demand_by_zip['daily_package_count_avg'] = demand_by_zip['package_count'] / date_count
-    demand_by_zip = demand_by_zip[['zip5','daily_package_count_avg']]
+    demand_by_zip = demand_by_zip[['zip5', 'daily_package_count_avg']]
 
     return demand_by_zip
 
 
-def calculate_fc_carrier_switch(
-        base_df,
-        iter_df
-        ):
+def calculate_fc_carrier_switch(baseline_sim_df, iteration_sim_df):
     """
+    Calculate FC and carrier switch metrics between baseline and iteration simulations.
+
     Args:
-        base_df: Baseline simulation that run with prd Ship Map File.
-        iter_df: Iteration simulation that run with 
-                    different SMF from prd.
+        baseline_sim_df: Baseline simulation that run with prd Ship Map File.
+        iteration_sim_df: Iteration simulation that run with different SMF from prd.
 
     Returns:
-        pd.DataFrame: DataFrame containing fc and carrier change 
-                    between baseline and iteration simulation
-
+        pd.DataFrame: DataFrame containing FC and carrier change metrics between 
+                     baseline and iteration simulation.
     """
+    # Merge baseline and iteration simulations
+    compare_df = baseline_sim_df.merge(
+        iteration_sim_df,
+        on=['order_id', 'shipment_tracking_number', 'order_placed_date', 'zip5']
+    )
 
-    compare_df = base_df.merge(
-        iter_df,
-        on=['order_id','shipment_tracking_number','order_placed_date','zip5']
-        )
+    # Calculate total package count per zip
+    package_count_by_zip = compare_df.groupby(['zip5'])['shipment_tracking_number'].nunique().reset_index()
+    package_count_by_zip.columns = ['zip5', 'package_count']
 
-    package_count_by_zip = compare_df\
-        .groupby(['zip5'])['shipment_tracking_number']\
-        .nunique()\
-        .reset_index()
-    package_count_by_zip.columns = ['zip5','package_count']
-
-
-    fc_switch = compare_df\
-        .groupby(['zip5','base_fc_name', 'sim_fc_name'])['shipment_tracking_number']\
-        .nunique()\
-        .reset_index()
-    fc_switch.columns = ['zip5','base_fc_name','sim_fc_name','package_count']
+    # Calculate FC switch count (packages that changed FC)
+    fc_switch = compare_df.groupby(
+        ['zip5', 'base_fc_name', 'sim_fc_name']
+    )['shipment_tracking_number'].nunique().reset_index()
+    fc_switch.columns = ['zip5', 'base_fc_name', 'sim_fc_name', 'package_count']
     fc_switch['fc_switch_package_count'] = fc_switch['package_count']
     fc_switch.loc[
-        fc_switch['base_fc_name'] == fc_switch['sim_fc_name']
-    ,'fc_switch_package_count'] = 0
-    fc_switch = fc_switch\
-        .groupby(['zip5'])['fc_switch_package_count']\
-        .sum()\
-        .reset_index()
+        fc_switch['base_fc_name'] == fc_switch['sim_fc_name'],
+        'fc_switch_package_count'
+    ] = 0
+    fc_switch = fc_switch.groupby(['zip5'])['fc_switch_package_count'].sum().reset_index()
 
-
-    carrier_switch = compare_df\
-        .groupby(['zip5','base_carrier_code', 'sim_carrier_code'])['shipment_tracking_number']\
-        .nunique()\
-        .reset_index()
-    carrier_switch.columns = ['zip5','base_carrier_code','sim_carrier_code','package_count']
+    # Calculate carrier switch count (packages that changed carrier)
+    carrier_switch = compare_df.groupby(
+        ['zip5', 'base_carrier_code', 'sim_carrier_code']
+    )['shipment_tracking_number'].nunique().reset_index()
+    carrier_switch.columns = ['zip5', 'base_carrier_code', 'sim_carrier_code', 'package_count']
     carrier_switch['carrier_switch_package_count'] = carrier_switch['package_count']
     carrier_switch.loc[
-        carrier_switch['base_carrier_code'] == carrier_switch['sim_carrier_code']
-    ,'carrier_switch_package_count'] = 0
-    carrier_switch = carrier_switch\
-        .groupby(['zip5'])['carrier_switch_package_count']\
-        .sum()\
-        .reset_index()
+        carrier_switch['base_carrier_code'] == carrier_switch['sim_carrier_code'],
+        'carrier_switch_package_count'
+    ] = 0
+    carrier_switch = carrier_switch.groupby(['zip5'])['carrier_switch_package_count'].sum().reset_index()
 
-    fc_carrier_switch = package_count_by_zip.merge(fc_switch,on='zip5',how='left')
+    # Combine metrics
+    fc_carrier_switch = package_count_by_zip.merge(fc_switch, on='zip5', how='left')
     fc_carrier_switch['fc_switch_package_count'] = fc_carrier_switch['fc_switch_package_count'].fillna(0)
-    fc_carrier_switch['fc_switch_package_per_temp'] = fc_carrier_switch['fc_switch_package_count'] / fc_carrier_switch['package_count']
-    fc_carrier_switch = fc_carrier_switch.merge(carrier_switch,on='zip5',how='left')
-    fc_carrier_switch['carrier_switch_package_count_temp'] = fc_carrier_switch['carrier_switch_package_count'].fillna(0)
+    fc_carrier_switch['fc_switch_package_per_temp'] = (
+        fc_carrier_switch['fc_switch_package_count'] / fc_carrier_switch['package_count']
+    )
+
+    fc_carrier_switch = fc_carrier_switch.merge(carrier_switch, on='zip5', how='left')
+    fc_carrier_switch['carrier_switch_package_count_temp'] = (
+        fc_carrier_switch['carrier_switch_package_count'].fillna(0)
+    )
 
     fc_carrier_switch = fc_carrier_switch[[
         'zip5',
         'fc_switch_package_per_temp',
         'carrier_switch_package_count_temp'
-        ]]
+    ]]
 
     return fc_carrier_switch
 
 
-def generate_reason_dea(
-        dea_df,
-        dea_threshold
-        ):
+def calculate_tnt_by_carrier_dow(baseline_sim_df, smf_expansion_df):
     """
+    Calculate average adjusted transit time (adjtnt) by day of week, zip, and carrier.
+
     Args:
-        dea_df: DataFrame that includes unpadded EDD DEA by 
-                delivery date, zip, fc, carrier.
+        baseline_sim_df: Baseline simulation that run with prd Ship Map File.
+        smf_expansion_df: DataFrame that includes expansion SMF by date, zip, carrier.
+
+    Returns:
+        pd.DataFrame: DataFrame containing average adjtnt by day of week, zip, carrier.
+    """
+    # Add day of week columns
+    baseline_sim_df['day_of_week'] = pd.to_datetime(baseline_sim_df['order_placed_date']).dt.dayofweek
+    smf_expansion_df['day_of_week'] = pd.to_datetime(smf_expansion_df['shipdate']).dt.dayofweek
+
+    # Aggregate package count by day of week, zip, and FC
+    base_df_agg = baseline_sim_df.groupby(
+        ['day_of_week', 'zip5', 'act_fc_name']
+    )['shipment_tracking_number'].nunique().reset_index()
+    base_df_agg.columns = ['day_of_week', 'zip5', 'fcname', 'package_count']
+
+    # Merge with SMF expansion data
+    adjtnt_df_avg = smf_expansion_df.merge(
+        base_df_agg,
+        on=['day_of_week', 'zip5', 'fcname'],
+        how='left'
+    )
+    adjtnt_df_avg['package_count'] = adjtnt_df_avg['package_count'].fillna(0)
+
+    # Calculate weighted average adjtnt
+    adjtnt_df_avg['weighted_adjtnt'] = adjtnt_df_avg['package_count'] * adjtnt_df_avg['adjtnt']
+    adjtnt_df_avg = adjtnt_df_avg.groupby(['day_of_week', 'zip5', 'mode']).agg({
+        'weighted_adjtnt': 'sum',
+        'package_count': 'sum',
+        'adjtnt': 'mean'
+    }).reset_index()
+    
+    adjtnt_df_avg.columns = [
+        'day_of_week', 'zip5', 'carrier_code', 'weighted_adjtnt', 'package_count', 'adjtnt_avg'
+    ]
+    adjtnt_df_avg['weighted_adjtnt_avg'] = (
+        adjtnt_df_avg['weighted_adjtnt'] / adjtnt_df_avg['package_count']
+    )
+    adjtnt_df_avg.loc[
+        adjtnt_df_avg['weighted_adjtnt_avg'].isnull(),
+        'weighted_adjtnt_avg'
+    ] = adjtnt_df_avg['adjtnt_avg']
+
+    return adjtnt_df_avg
+
+
+def generate_reason_dea(dea_df, dea_threshold):
+    """
+    Generate DEA reason codes based on unpadded EDD DEA metrics.
+
+    Args:
+        dea_df: DataFrame that includes unpadded EDD DEA by delivery date, zip, fc, carrier.
         dea_threshold: unpadded EDD DEA threshold.
-        dea_lookback_day_count: lookback day count for unpadded EDD DEA calculation.
 
     Returns:
         pd.DataFrame: DataFrame containing zip codes with reason code for DEA.
-
     """
+    # Count unique days per zip-carrier combination
+    dea_day_count = dea_df.groupby(['zip5', 'carrier_code'])['unpadded_edd'].nunique().reset_index()
+    dea_day_count.columns = ['zip5', 'carrier_code', 'dea_day_count']
 
-    dea_day_count = dea_df\
-        .groupby(['zip5','carrier_code'])['delivery_date']\
-        .nunique()\
-        .reset_index()
-    dea_day_count.columns = ['zip5','carrier_code','dea_day_count']
+    # Aggregate DEA counts and package counts
+    dea_df_agg = dea_df.groupby(['zip5', 'carrier_code'])[
+        ['unpadded_edd_dea_count', 'package_count']
+    ].sum().reset_index()
 
-    dea_df_agg = dea_df\
-        .groupby(['zip5','carrier_code'])[['unpadded_edd_dea_count','package_count']]\
-        .sum()\
-        .reset_index()
+    # Calculate DEA rate
+    dea_df_agg['unpadded_edd_dea'] = (
+        dea_df_agg['unpadded_edd_dea_count'] / dea_df_agg['package_count']
+    )
 
-    dea_df_agg['unpadded_edd_dea'] = dea_df_agg[
-        'unpadded_edd_dea_count'] / dea_df_agg[
-            'package_count']
+    # Merge with day count and filter for zips with at least 3 days of data
+    dea_df_agg = dea_df_agg.merge(dea_day_count, on=['zip5', 'carrier_code'])
+    dea_df_agg = dea_df_agg.loc[dea_df_agg['dea_day_count'] >= 3]
 
-    dea_df_agg = dea_df_agg.merge(
-        dea_day_count,
-        on=['zip5','carrier_code'])
+    dea_df_agg['act_package_count'] = dea_df_agg['package_count']
 
-    dea_df_agg = dea_df_agg.loc[
-        dea_df_agg['dea_day_count'] >= 3
-    ]
-
-    # dea_df_agg.to_parquet('./archieve/dea_df_agg.parquet')
-
-    dea_df_agg_p = dea_df_agg.pivot(
+    # Pivot to get carrier-specific columns
+    dea_df_agg_p = dea_df_agg.pivot_table(
         index='zip5',
         columns='carrier_code',
-        values='unpadded_edd_dea')\
-        .reset_index()
+        values=['unpadded_edd_dea', 'act_package_count'],
+        aggfunc='first'
+    ).reset_index()
 
-    # dea_df_agg_p.to_parquet('./archieve/dea_df_agg_p.parquet')
+    dea_df_agg_p.columns = ['zip5'] + [
+        f'{col[1]}_{col[0]}' for col in dea_df_agg_p.columns.values if col[0] != 'zip5'
+    ]
 
-    dea_df_agg_p.columns = ['zip5'] \
-        + [f'{col}_unpadded_edd_dea' for col in dea_df_agg_p.columns.values if col != 'zip5']
+    # Ensure both carrier columns exist
+    if 'ONTRGD_unpadded_edd_dea' not in dea_df_agg_p.columns:
+        dea_df_agg_p['ONTRGD_unpadded_edd_dea'] = None
+        dea_df_agg_p['ONTRGD_act_package_count'] = None
+    if 'FDXHD_unpadded_edd_dea' not in dea_df_agg_p.columns:
+        dea_df_agg_p['FDXHD_unpadded_edd_dea'] = None
+        dea_df_agg_p['FDXHD_act_package_count'] = None
 
+    # Apply DEA reason code logic
     dea_df_agg_p.loc[
         (dea_df_agg_p['ONTRGD_unpadded_edd_dea'] < dea_threshold)
-        & (dea_df_agg_p['FDXHD_unpadded_edd_dea'] < dea_threshold)
-        ,'reason_code_dea'] = 'ok'
+        & (dea_df_agg_p['FDXHD_unpadded_edd_dea'] < dea_threshold),
+        'reason_code_dea'
+    ] = 'ok'
 
     dea_df_agg_p.loc[
         (dea_df_agg_p['ONTRGD_unpadded_edd_dea'] >= dea_threshold)
-        & (dea_df_agg_p['FDXHD_unpadded_edd_dea'] >= dea_threshold)
-        ,'reason_code_dea'] = 'ok'
+        & (dea_df_agg_p['FDXHD_unpadded_edd_dea'] >= dea_threshold),
+        'reason_code_dea'
+    ] = 'ok'
 
     dea_df_agg_p.loc[
         (dea_df_agg_p['ONTRGD_unpadded_edd_dea'] < dea_threshold)
-        & (dea_df_agg_p['FDXHD_unpadded_edd_dea'] >= dea_threshold)
-        ,'reason_code_dea'] = 'deactivate'
+        & (dea_df_agg_p['FDXHD_unpadded_edd_dea'] >= dea_threshold),
+        'reason_code_dea'
+    ] = 'deactivate'
 
-    #dea_df_agg_p.loc[
-    #    (dea_df_agg_p['ONTRGD_unpadded_edd_dea'] >= dea_threshold)
-    #    & (dea_df_agg_p['FDXHD_unpadded_edd_dea'] < dea_threshold)
-    #    ,'reason_code_dea'] = 'activate'
+    # TODO: Activate logic (currently commented out)
+    # dea_df_agg_p.loc[
+    #     (dea_df_agg_p['ONTRGD_unpadded_edd_dea'] >= dea_threshold)
+    #     & (dea_df_agg_p['FDXHD_unpadded_edd_dea'] < dea_threshold)
+    #     ,'reason_code_dea'] = 'activate'
 
     return dea_df_agg_p
 
 
 def generate_reason_backlog(
-        base_df,
+        baseline_sim_df,
         backlog_df,
         backlog_threshold,
-        clear_date_threshold,
-        smf_df
+        clear_date_threshold,  # pylint: disable=unused-argument
+        smf_expansion_df
         ):
     """
+    Generate backlog reason codes based on days behind metrics.
+
     Args:
-        base_df: Baseline simulation that run with prd Ship Map File.
+        baseline_sim_df: Baseline simulation that run with prd Ship Map File.
         backlog_df: DataFrame that includes backlog by date, zip, carrier.
         backlog_threshold: Backlog threshold.
-        clear_date_threshold: Clear date threshold.
-        smf_df: DataFrame that includes expansion SMF by date, zip, carrier.
+        clear_date_threshold: Clear date threshold (currently unused).
+        smf_expansion_df: DataFrame that includes expansion SMF by date, zip, carrier.
 
     Returns:
         pd.DataFrame: DataFrame containing zip codes with reason code for Backlog.
-
     """
-    # get latest backlog date
-    backlog_df = backlog_df.loc[
-                backlog_df['date'] == backlog_df['date'].max()]
 
-    # calculate average adjtnt by date, zip, carrier
-    base_df_agg = base_df\
-        .groupby(['order_placed_date','zip5','act_fc_name'])['shipment_tracking_number']\
-            .nunique()\
-                .reset_index()
-    base_df_agg.columns = ['shipdate','zip5','fcname','package_count']
-
-    adjtnt_df_avg = smf_df.merge(
-        base_df_agg,
-        on=['shipdate','zip5','fcname'],
-        how='left'
+    # Find the latest date with both FDXHD and ONTRGD present in carrier_code
+    latest_date_with_both = (
+        backlog_df.groupby('date')['carrier_code']
+        .apply(lambda x: set(['FDXHD', 'ONTRGD']).issubset(set(x)))
+        .loc[lambda s: s].index.max()
     )
-    adjtnt_df_avg['package_count'] = adjtnt_df_avg['package_count'].fillna(0)
 
-    adjtnt_df_avg['weighted_adjtnt'] = adjtnt_df_avg['package_count'] * adjtnt_df_avg['adjtnt']
-    adjtnt_df_avg = adjtnt_df_avg\
-        .groupby(['shipdate','zip5','mode'])\
-            .agg({
-                'weighted_adjtnt': 'sum',
-                'package_count': 'sum',
-                'adjtnt': 'mean'
-            })\
-                 .reset_index()
-    adjtnt_df_avg.columns = [
-        'date','zip5','carrier_code','weighted_adjtnt','package_count','adjtnt_avg']
-    adjtnt_df_avg['weighted_adjtnt_avg'] = adjtnt_df_avg['weighted_adjtnt'] / adjtnt_df_avg['package_count']
-    adjtnt_df_avg.loc[
-        adjtnt_df_avg['weighted_adjtnt_avg'].isnull()
-        ,'weighted_adjtnt_avg'] = adjtnt_df_avg['adjtnt_avg']
+    # Get latest backlog date
+    backlog_df = backlog_df.loc[backlog_df['date'] == latest_date_with_both]
+    backlog_df['day_of_week'] = pd.to_datetime(backlog_df['date']).dt.dayofweek
 
-    # merge backlog and average adjtnt
+    # Calculate average adjtnt by day of week, zip, carrier
+    adjtnt_df_avg = calculate_tnt_by_carrier_dow(baseline_sim_df, smf_expansion_df)
+
+    # Merge backlog and average adjtnt
     clear_df = backlog_df.merge(
         adjtnt_df_avg,
-        on=['date','zip5','carrier_code'],
-        how='left')
+        on=['day_of_week', 'zip5', 'carrier_code'],
+        how='left'
+    )
     clear_df['weighted_adjtnt_avg'] = clear_df['weighted_adjtnt_avg'].fillna(2)
 
-    # get max of estimate clear date and date+adjtnt_avg
-    clear_df['estimated_clear_date_max'] = clear_df.apply(
-        lambda row: max(
-            pd.to_datetime(row['estimated_clear_date']),
-            pd.to_datetime(row['date']) + pd.to_timedelta(row['weighted_adjtnt_avg'], unit='D')
-        ),
-        axis=1
-    )
+    # TODO: get max of estimate clear date and date+adjtnt_avg
+    # clear_df['estimated_clear_date_max'] = clear_df.apply(
+    #     lambda row: max(
+    #         pd.to_datetime(row['estimated_clear_date']),
+    #         pd.to_datetime(row['date']) + pd.to_timedelta(row['weighted_adjtnt_avg'], unit='D')
+    #     ),
+    #     axis=1
+    # )
 
-    clear_df_p = clear_df.pivot(
+    # Pivot to get carrier-specific columns
+    clear_df_p = clear_df.pivot_table(
         index='zip5',
         columns='carrier_code',
-        values=['days_behind','estimated_clear_date_max'])\
-        .reset_index()
+        values=['days_behind', 'weighted_adjtnt_avg'],
+        aggfunc='first'
+    ).reset_index()
 
-    clear_df_p.columns = ['zip5'] \
-        + [f'{col[1]}_{col[0]}' for col in clear_df_p.columns.values if col[0] != 'zip5']
+    clear_df_p.columns = ['zip5'] + [
+        f'{col[1]}_{col[0]}' for col in clear_df_p.columns.values if col[0] != 'zip5'
+    ]
 
-    clear_df_p['reason_code_backlog'] = 'ok'
+    # Ensure both carrier columns exist
+    if 'ONTRGD_days_behind' not in clear_df_p.columns:
+        clear_df_p['ONTRGD_days_behind'] = None
+        clear_df_p['ONTRGD_estimated_clear_date_max'] = None
+    if 'FDXHD_days_behind' not in clear_df_p.columns:
+        clear_df_p['FDXHD_days_behind'] = None
+        clear_df_p['FDXHD_estimated_clear_date_max'] = None
 
-    """
+    # Apply backlog reason code logic
     clear_df_p.loc[
-        (clear_df_p['ONTRGD_days_behind'] >= backlog_threshold)
-        & (clear_df_p['ONTRGD_estimated_clear_date_max'] - clear_df_p['FDXHD_estimated_clear_date_max'] >= clear_date_threshold)
-        ,'reason_code_backlog'] = 'deactivate'
+        (clear_df_p['ONTRGD_days_behind'] < backlog_threshold)
+        & (clear_df_p['FDXHD_days_behind'] < backlog_threshold),
+        'reason_code_backlog'
+    ] = 'ok'
 
     clear_df_p.loc[
-        (clear_df_p['FDXHD_days_behind'] >= backlog_threshold)
-        & (clear_df_p['FDXHD_estimated_clear_date_max'] - clear_df_p['ONTRGD_estimated_clear_date_max'] >= clear_date_threshold)
-        ,'reason_code_backlog'] = 'activate'
+        clear_df_p['ONTRGD_days_behind'] >= backlog_threshold,
+        'reason_code_backlog'
+    ] = 'deactivate'
 
-    print(clear_df_p['FDXHD_estimated_clear_date_max'] - clear_df_p['ONTRGD_estimated_clear_date_max'])
-    print(clear_df_p['FDXHD_estimated_clear_date_max'] - clear_df_p['ONTRGD_estimated_clear_date_max'] >= clear_date_threshold)
-    print(clear_df_p)
+    clear_df_p.loc[
+        clear_df_p['FDXHD_days_behind'] >= backlog_threshold,
+        'reason_code_backlog'
+    ] = 'activate'
 
-    """
+    # TODO: Alternative backlog logic using clear_date_threshold
+    # clear_df_p.loc[
+    #     (clear_df_p['ONTRGD_days_behind'] >= backlog_threshold)
+    #     & (clear_df_p['ONTRGD_estimated_clear_date_max'] - clear_df_p['FDXHD_estimated_clear_date_max'] >= clear_date_threshold)
+    #     ,'reason_code_backlog'] = 'deactivate'
+    #
+    # clear_df_p.loc[
+    #     (clear_df_p['FDXHD_days_behind'] >= backlog_threshold)
+    #     & (clear_df_p['FDXHD_estimated_clear_date_max'] - clear_df_p['ONTRGD_estimated_clear_date_max'] >= clear_date_threshold)
+    #     ,'reason_code_backlog'] = 'activate'
+    #
+    # print(clear_df_p['FDXHD_estimated_clear_date_max'] - clear_df_p['ONTRGD_estimated_clear_date_max'])
+    # print(clear_df_p['FDXHD_estimated_clear_date_max'] - clear_df_p['ONTRGD_estimated_clear_date_max'] >= clear_date_threshold)
+    # print(clear_df_p)
 
     return clear_df_p
 
 
-def resolve_current_decision(row):
-
+def generate_reason_shutdown(
+        run_date,
+        shutdown_df,
+        clear_date_threshold,
+        baseline_sim_df,
+        smf_expansion_df
+    ):
     """
+    Generate shutdown reason codes based on estimated clear dates.
+
+    Args:
+        run_date: Date of the run.
+        shutdown_df: DataFrame that includes shutdown by start date, end date, zip, carrier.
+        clear_date_threshold: Clear date threshold.
+        baseline_sim_df: Baseline simulation that run with prd Ship Map File.
+        smf_expansion_df: DataFrame that includes expansion SMF by date, zip, carrier.
+
+    Returns:
+        pd.DataFrame: DataFrame containing zip codes with reason code for Shutdown.
+    """
+    # Get tomorrow's shutdown data if any
+    tomorrow_date = (pd.to_datetime(run_date) + timedelta(days=1)).strftime('%Y-%m-%d')
+    shutdown_df = shutdown_df.loc[shutdown_df['start_date'] == tomorrow_date]
+
+    if shutdown_df.shape[0] > 0:
+        shutdown_zips = pd.DataFrame()
+        shutdown_zips_temp = shutdown_df[['zip5']].drop_duplicates()
+        for carrier in ['FDXHD', 'ONTRGD']:
+            shutdown_zips_temp_copy = shutdown_zips_temp.copy()
+            shutdown_zips_temp_copy['carrier_code'] = carrier
+            shutdown_zips = pd.concat([shutdown_zips, shutdown_zips_temp_copy], ignore_index=True)
+
+        shutdown_zips = shutdown_zips.merge(
+            shutdown_df[['zip5','carrier_code','start_date','end_date']],
+            on=['zip5','carrier_code'],
+            how='left'
+        )
+        shutdown_zips.loc[
+            (shutdown_zips['end_date'].isnull())
+            & (shutdown_zips['start_date'].isnull()),
+            'end_date'] = run_date
+
+        shutdown_zips.loc[
+            (shutdown_zips['end_date'].isnull())
+            & (~shutdown_zips['start_date'].isnull()),
+            'end_date'] = '9999-12-31'
+
+        shutdown_zips['run_date'] = run_date
+        shutdown_zips['day_of_week'] = pd.to_datetime(shutdown_zips['run_date']).dt.dayofweek
+
+        # Calculate average adjtnt by day of week, zip, carrier
+        adjtnt_df_avg = calculate_tnt_by_carrier_dow(baseline_sim_df, smf_expansion_df)
+
+        # Merge shutdown and average adjtnt
+        clear_df = shutdown_zips.merge(
+            adjtnt_df_avg,
+            on=['day_of_week', 'zip5', 'carrier_code'],
+            how='left'
+        )
+        clear_df['weighted_adjtnt_avg'] = clear_df['weighted_adjtnt_avg'].fillna(2)
+
+        # Calculate estimated clear date (max of end_date or run_date + adjtnt)
+        clear_df['estimated_clear_date_max'] = clear_df.apply(
+            lambda row: max(
+                pd.to_datetime(row['end_date']),
+                pd.to_datetime(row['run_date']) + pd.to_timedelta(row['weighted_adjtnt_avg'], unit='D')
+            ),
+            axis=1
+        )
+
+        # Pivot to get carrier-specific columns
+        clear_df_p = clear_df.pivot_table(
+            index='zip5',
+            columns='carrier_code',
+            values=['end_date', 'estimated_clear_date_max'],
+            aggfunc='first'
+        ).reset_index()
+        clear_df_p.columns = ['zip5'] + [
+            f'{col[1]}_{col[0]}' for col in clear_df_p.columns.values if col[0] != 'zip5'
+        ]
+
+        # Apply shutdown reason code logic
+        clear_df_p['reason_code_shutdown'] = 'ok'
+
+        clear_df_p.loc[
+            (clear_df_p['ONTRGD_estimated_clear_date_max'] - 
+             clear_df_p['FDXHD_estimated_clear_date_max'] >= clear_date_threshold),
+            'reason_code_shutdown'
+        ] = 'deactivate'
+
+        clear_df_p.loc[
+            (clear_df_p['FDXHD_estimated_clear_date_max'] - 
+             clear_df_p['ONTRGD_estimated_clear_date_max'] >= clear_date_threshold),
+            'reason_code_shutdown'
+        ] = 'activate'
+
+        return clear_df_p
+    
+    # Return empty DataFrame if no shutdown data
+    return pd.DataFrame()
+
+
+def resolve_current_decision(row):
+    """
+    Resolve current recommendation based on reason codes with priority order.
+
+    Priority: DEA > Shutdown > Backlog > OK
+
     Args:
         row: Row of DataFrame containing zip codes to activate or deactivate.
 
     Returns:
         pd.Series: Series containing current recommendation and reasons.
     """
-
     reason_dea = row.get('reason_code_dea', None)
     reason_shutdown = row.get('reason_code_shutdown', None)
     reason_backlog = row.get('reason_code_backlog', None)
 
-    # dea ALWAYS takes precedence
+    # DEA ALWAYS takes precedence
     if reason_dea in ['activate', 'deactivate']:
         return pd.Series({
             'current_recommendation': reason_dea,
@@ -431,41 +604,44 @@ def resolve_current_decision(row):
             'current_reason_shutdown': None,
             'current_reason_backlog': None
         })
-    # shutdown next (ONLY IF dea is not activate/deactivate)
-    elif reason_shutdown in ['activate', 'deactivate']:
+
+    # Shutdown next (ONLY IF dea is not activate/deactivate)
+    if reason_shutdown in ['activate', 'deactivate']:
         return pd.Series({
             'current_recommendation': reason_shutdown,
             'current_reason_dea': None,
             'current_reason_shutdown': reason_shutdown,
             'current_reason_backlog': None
         })
-    # backlog next
-    elif reason_backlog in ['activate', 'deactivate']:
+
+    # Backlog next
+    if reason_backlog in ['activate', 'deactivate']:
         return pd.Series({
             'current_recommendation': reason_backlog,
             'current_reason_dea': None,
             'current_reason_shutdown': None,
             'current_reason_backlog': reason_backlog
         })
-    else:
-        # Any ok can be propagated
-        decision = None
-        rdea = None
-        rshutdown = None
-        rbacklog = None
-        if reason_dea == 'ok':
-            decision, rdea = 'ok', 'ok'
-        elif reason_shutdown == 'ok':
-            decision, rshutdown = 'ok', 'ok'
-        elif reason_backlog == 'ok':
-            decision, rbacklog = 'ok', 'ok'
 
-        return pd.Series({
-            'current_recommendation': decision,
-            'current_reason_dea': rdea,
-            'current_reason_shutdown': rshutdown,
-            'current_reason_backlog': rbacklog
-        })
+    # Any 'ok' can be propagated (priority: DEA > Shutdown > Backlog)
+    decision = None
+    rdea = None
+    rshutdown = None
+    rbacklog = None
+
+    if reason_dea == 'ok':
+        decision, rdea = 'ok', 'ok'
+    elif reason_shutdown == 'ok':
+        decision, rshutdown = 'ok', 'ok'
+    elif reason_backlog == 'ok':
+        decision, rbacklog = 'ok', 'ok'
+
+    return pd.Series({
+        'current_recommendation': decision,
+        'current_reason_dea': rdea,
+        'current_reason_shutdown': rshutdown,
+        'current_reason_backlog': rbacklog
+    })
 
 
 def determine_final_decision(row):
@@ -554,26 +730,27 @@ def determine_final_decision(row):
 
 def calculate_priority_score(df):
     """
+    Calculate priority score for zip codes based on package count and DEA metrics.
+
+    Priority score = 0.3 * (scaled package count) + 0.7 * (inverted scaled DEA)
+
     Args:
         df: DataFrame containing zip codes to calculate priority score.
 
     Returns:
-        pd.DataFrame: DataFrame containing zip codes with priority score.
+        pd.DataFrame: DataFrame containing zip codes with priority score, sorted descending.
     """
     if df.shape[0] > 0:
         scaler = MinMaxScaler()
-        df['daily_package_count_avg_scaled'] = scaler.fit_transform(
-                df[['daily_package_count_avg']])
-        df['unpadded_edd_dea_scaled'] = scaler.fit_transform(
-                df[['unpadded_edd_dea']])
+        df['act_package_count_scaled'] = scaler.fit_transform(df[['act_package_count']])
+        df['unpadded_edd_dea_scaled'] = scaler.fit_transform(df[['unpadded_edd_dea']])
         df['inverted_dea'] = 1 - df['unpadded_edd_dea_scaled']
 
-        df['priority_score'] = (df['daily_package_count_avg_scaled'] * 0.3) + \
-                                (df['inverted_dea'] * 0.7)
+        df['priority_score'] = (
+            df['act_package_count_scaled'] * 0.3 + df['inverted_dea'] * 0.7
+        )
 
-        df = df.sort_values(
-            'priority_score', 
-            ascending=False)
+        df = df.sort_values('priority_score', ascending=False)
     else:
         df['priority_score'] = None
 
@@ -581,195 +758,241 @@ def calculate_priority_score(df):
 
 
 def get_zip_recommendation(
+        RUN_DATE,
+        RUN_NAME,
         zip_status_df,
-        base_df,
-        remediate_df,
-        expand_df,
+        baseline_sim_df,
+        remediate_sim_df,
+        expand_sim_df,  # pylint: disable=unused-argument
         dea_df,
         dea_threshold,
         backlog_df,
         backlog_threshold,
         clear_date_threshold,
-        smf_df,
+        smf_expansion_df,
         last_zip_recommendation,
-        fc_switch_th=0.1,
+        fc_switch_threshold=0.1,
         zip_volume_floor=25
     ):
     """
     Args:
         zip_status_df: DataFrame that includes zip status.
-        base_df: Baseline simulation that run with prd Ship Map File.
-        remediate_df: DataFrame that includes remediate simulation that run with FDXHD Ship Map File.
-        expand_df: DataFrame that includes expand simulation that run with prd Ship Map File + eligible ONTRGD Ship Map File.
+        baseline_sim_df: Baseline simulation 
+            that run with prd Ship Map File.
+        remediate_sim_df: DataFrame that includes remediate simulation 
+            that run with FDXHD Ship Map File.
+        expand_sim_df: DataFrame that includes expand simulation 
+            that run with prd Ship Map File + eligible ONTRGD Ship Map File.
         dea_df: DataFrame that includes unpadded EDD DEA by delivery date, zip, fc.
         dea_threshold: unpadded EDD DEA threshold.
-        dea_lookback_day_count: lookback day count for unpadded EDD DEA calculation.
         backlog_df: DataFrame that includes backlog by date, zip, carrier.
         backlog_threshold: Backlog threshold.
         clear_date_threshold: Clear date threshold.
-        smf_df: DataFrame that includes expansion SMF by date, zip, carrier.
+        smf_expansion_df: DataFrame that includes expansion SMF by date, zip, carrier.
         last_zip_recommendation: DataFrame that includes last zip recommendation.
-        fc_switch_th: FC switch threshold.
+        fc_switch_threshold: FC switch threshold.
         zip_volume_floor: Zip volume floor.
 
     Returns:
         pd.DataFrame: DataFrame containing zip codes with reason code for remediation and expansion.
     """
+    ## STEP 1: Calculate base metrics and reason codes
 
-    # Calculate fc-carrier switch
+    # Calculate FC-carrier switch for remediation
     fc_carrier_switch_remediate = calculate_fc_carrier_switch(
-        base_df,
-        remediate_df
+        baseline_sim_df,
+        remediate_sim_df
     )
 
-    fc_carrier_switch_expand = calculate_fc_carrier_switch(
-        base_df,
-        expand_df
-    )
+    # TODO: change to expand_df
+    # fc_carrier_switch_expand = calculate_fc_carrier_switch(
+    #     baseline_sim_df,
+    #     expand_sim_df
+    # )
 
     # Calculate zip daily volume
-    zip_volume_daily = calculate_zip_volume_daily(
-        base_df
-    )
+    zip_volume_daily = calculate_zip_volume_daily(baseline_sim_df)
 
-    # DEA rule for remediation
-    zips_to_recommend_dea = generate_reason_dea(
-        dea_df,
-        dea_threshold
-        )
+    # Get DEA reason code
+    zips_to_recommend_dea = generate_reason_dea(dea_df, dea_threshold)
     zips_to_recommend_dea = zips_to_recommend_dea[
-        ['zip5','FDXHD_unpadded_edd_dea','ONTRGD_unpadded_edd_dea','reason_code_dea']]
+        ['zip5', 'FDXHD_unpadded_edd_dea', 'ONTRGD_unpadded_edd_dea', 
+         'reason_code_dea', 'FDXHD_act_package_count', 'ONTRGD_act_package_count']
+    ]
 
-    # Backlog rule for remediation
+    # Get Backlog reason code
     zips_to_recommend_backlog = generate_reason_backlog(
-        base_df,
+        baseline_sim_df,
         backlog_df,
         backlog_threshold,
         clear_date_threshold,
-        smf_df
-        )
+        smf_expansion_df
+    )
     zips_to_recommend_backlog = zips_to_recommend_backlog[
-        ['zip5','FDXHD_days_behind','reason_code_backlog']] # 'ONTRGD_days_behind',
+        ['zip5', 'FDXHD_days_behind', 'ONTRGD_days_behind', 'reason_code_backlog']
+    ]
 
     # shutdown rule for expansion / remediation
+    # (Currently not implemented)
 
-    # master table for zips to remediate # FIX THIS
-    zips_to_recommend = zip_status_df.merge(fc_carrier_switch_expand, on='zip5', how='left')
-    zips_to_recommend.loc[
-        zips_to_recommend['active'] == 0,
-        'fc_switch_package_per'] = zips_to_recommend.loc[
-        zips_to_recommend['active'] == 0,
-        'fc_switch_package_per_temp']
-    zips_to_recommend = zips_to_recommend.drop(
-        ['fc_switch_package_per_temp','carrier_switch_package_count_temp'], axis=1)
+    ## STEP 2: Build master table with all reason codes
 
+    # TODO: change to expand_df
+    # zips_to_recommend = zip_status_df.merge(
+    # fc_carrier_switch_expand, on='zip5', how='left')
+    #
+    # zips_to_recommend.loc[
+    #     zips_to_recommend['active'] == 0,
+    #     'fc_switch_package_per'
+    # ] = zips_to_recommend.loc[
+    #     zips_to_recommend['active'] == 0,
+    #     'fc_switch_package_per_temp'
+    # ]
+    # zips_to_recommend = zips_to_recommend.drop(
+    #     ['fc_switch_package_per_temp','carrier_switch_package_count_temp'], 
+    # axis=1)
 
-    zips_to_recommend = zips_to_recommend.merge(fc_carrier_switch_remediate, on='zip5', how='left')
+    # Merge zip status with FC-carrier switch for remediation
+    zips_to_recommend = zip_status_df.merge(
+        fc_carrier_switch_remediate, on='zip5', how='left')
+
     zips_to_recommend.loc[
         zips_to_recommend['active'] == 1,
-        'fc_switch_package_per'] = zips_to_recommend.loc[
+        'fc_switch_package_per'
+    ] = zips_to_recommend.loc[
         zips_to_recommend['active'] == 1,
-        'fc_switch_package_per_temp']
-    zips_to_recommend = zips_to_recommend.drop(
-        ['fc_switch_package_per_temp','carrier_switch_package_count_temp'], axis=1)
+        'fc_switch_package_per_temp'
+    ]
 
+    # Clean up temporary columns
+    zips_to_recommend = zips_to_recommend.drop(
+        ['fc_switch_package_per_temp', 'carrier_switch_package_count_temp'],
+        axis=1
+    )
+
+    # Merge all reason code dataframes
     zips_to_recommend = zips_to_recommend.merge(zip_volume_daily, on='zip5', how='left')
     zips_to_recommend = zips_to_recommend.merge(zips_to_recommend_dea, on='zip5', how='left')
-    zips_to_recommend = zips_to_recommend.merge(zips_to_recommend_backlog, on='zip5', how='left')
-    # If reason_dea is activate or deactivate, it ALWAYS takes priority,
-    # regardless of any shutdown or backlog value.
-    # Only if dea is not activate/deactivate, then shutdown is checked; otherwise, backlog.
+    zips_to_recommend = zips_to_recommend.merge(
+        zips_to_recommend_backlog, on='zip5', how='left')
+
+    ## STEP 3: Apply decision logic
+
     current_recommendation = zips_to_recommend.apply(resolve_current_decision, axis=1)
     zips_to_recommend = pd.concat([zips_to_recommend, current_recommendation], axis=1)
 
-    zips_to_recommend = zips_to_recommend.merge(last_zip_recommendation, on='zip5', how='left')
+    # Merge last recommendation and determine final decision
+    zips_to_recommend = zips_to_recommend.merge(
+        last_zip_recommendation, on='zip5', how='left')
     final_recommendation = zips_to_recommend.apply(determine_final_decision, axis=1)
     zips_to_recommend = pd.concat([zips_to_recommend, final_recommendation], axis=1)
 
-    # zips_to_recommend.to_parquet('./archieve/zips_to_recommend.parquet')
+    ## STEP 4: Apply additional constraints
 
-    # apply additional constraint if any
     if zip_volume_floor:
         zips_to_recommend = zips_to_recommend.loc[
             zips_to_recommend['daily_package_count_avg'] >= zip_volume_floor
         ]
 
-    if fc_switch_th:
+    if fc_switch_threshold:
         zips_to_recommend = zips_to_recommend.loc[
-            zips_to_recommend['fc_switch_package_per'] <= fc_switch_th]
-
-    # zips_to_recommend.to_parquet('./archieve/zips_to_recommend.parquet')
-
-    # split remediation and expansion to two groups
-    zips_to_recommend_remediate = zips_to_recommend.loc[
-        (zips_to_recommend['active'] == 1)
-        & (zips_to_recommend['final_recommendation'] == 'deactivate')]
-    zips_to_recommend_expand = zips_to_recommend.loc[
-        (zips_to_recommend['active'] == 0)
-        & (zips_to_recommend['final_recommendation'] == 'activate')]
-
-    cols = ['zip5','active',
-            'daily_package_count_avg',
-            'current_recommendation',
-            'current_reason_dea',
-            'current_reason_shutdown',
-            'current_reason_backlog',
-            'last_recommendation',
-            'last_reason_dea',
-            'last_reason_shutdown',
-            'last_reason_backlog',
-            'final_recommendation',
-            'final_reason_dea',
-            'final_reason_shutdown',
-            'final_reason_backlog'
-            ]
-    zips_to_recommend_remediate = zips_to_recommend_remediate[
-        cols + ['ONTRGD_unpadded_edd_dea']] # ,'ONTRGD_days_behind'
-    zips_to_recommend_remediate.columns = cols + ['unpadded_edd_dea'] # ,'days_behind'
-    zips_to_recommend_expand = zips_to_recommend_expand[
-        cols + ['FDXHD_unpadded_edd_dea']] # ,'FDXHD_days_behind'
-    zips_to_recommend_expand.columns = cols + ['unpadded_edd_dea'] # ,'days_behind'
+            zips_to_recommend['fc_switch_package_per'] <= fc_switch_threshold
+        ]
 
     # apply exclusion list
+    # (Currently not implemented)
 
-    # calculate priority score
+    ## STEP 5: Save intermediate results
+
+    if not os.path.exists(f'./results/execution/{RUN_NAME}/metadata/{RUN_DATE}'):
+        os.makedirs(f'./results/execution/{RUN_NAME}/metadata/{RUN_DATE}')
+    zips_to_recommend.to_parquet(
+        f'./results/execution/{RUN_NAME}/metadata/{RUN_DATE}/zips_to_recommend.parquet')
+
+    ## STEP 6: Split into remediation and expansion groups
+
+    zips_to_recommend_remediate = zips_to_recommend.loc[
+        (zips_to_recommend['active'] == 1)
+        & (zips_to_recommend['final_recommendation'] == 'deactivate')
+    ]
+    zips_to_recommend_expand = zips_to_recommend.loc[
+        (zips_to_recommend['active'] == 0)
+        & (zips_to_recommend['final_recommendation'] == 'activate')
+    ]
+
+    ## STEP 7: Format output columns
+
+    cols = [
+        'zip5', 'active', 'daily_package_count_avg',
+        'current_recommendation', 'current_reason_dea', 
+        'current_reason_shutdown', 'current_reason_backlog',
+        'last_recommendation', 'last_reason_dea', 
+        'last_reason_shutdown', 'last_reason_backlog',
+        'final_recommendation', 'final_reason_dea', 
+        'final_reason_shutdown', 'final_reason_backlog'
+    ]
+
+    # Format remediation output
+    zips_to_recommend_remediate = zips_to_recommend_remediate[
+        cols + ['ONTRGD_unpadded_edd_dea', 'ONTRGD_act_package_count']
+    ]  # ,'ONTRGD_days_behind'
+    zips_to_recommend_remediate.columns = cols + [
+        'unpadded_edd_dea', 'act_package_count'
+    ]  # ,'days_behind'
+
+    # Format expansion output
+    zips_to_recommend_expand = zips_to_recommend_expand[
+        cols + ['FDXHD_unpadded_edd_dea', 'FDXHD_act_package_count']
+    ]  # ,'FDXHD_days_behind'
+    zips_to_recommend_expand.columns = cols + [
+        'unpadded_edd_dea', 'act_package_count'
+    ]  # ,'days_behind'
+
+    ## STEP 8: Calculate priority scores and finalize outputs
+
     zips_to_recommend_remediate = calculate_priority_score(zips_to_recommend_remediate)
     zips_to_recommend_expand = calculate_priority_score(zips_to_recommend_expand)
 
+    # Select final columns
     zips_to_recommend_remediate = zips_to_recommend_remediate[cols + ['priority_score']]
     zips_to_recommend_expand = zips_to_recommend_expand[cols + ['priority_score']]
 
-    # zips_to_recommend_remediate.to_parquet('./archieve/zips_to_recommend_remediate.parquet')
-    # zips_to_recommend_expand.to_parquet('./archieve/zips_to_recommend_expand.parquet')
+    # Save final intermediate outputs
+    zips_to_recommend_remediate.to_parquet(
+        f'./results/execution/{RUN_NAME}/metadata/{RUN_DATE}/zips_to_recommend_remediate.parquet')
+    zips_to_recommend_expand.to_parquet(
+        f'./results/execution/{RUN_NAME}/metadata/{RUN_DATE}/zips_to_recommend_expand.parquet')
 
     return zips_to_recommend_remediate, zips_to_recommend_expand
 
 
-def select_zips_and_get_simulation(
-          simulation_df,
-          zip_df,
-          zip_count):
+def select_zips_and_get_simulation(simulation_df, zip_df, zip_count):
     """
+    Select top N zip codes by priority score and return corresponding simulation data.
+
     Args:
         simulation_df: DataFrame of selected simulation.
-        zip_score_df: DataFrame that contains priority score of each zip code.
+        zip_df: DataFrame that contains priority score of each zip code.
         zip_count: Zip count threshold to turn on / off ONTRGD.
-        # package_count: Package count threshold to switch one carrier to another.
 
     Returns:
-        pd.DataFrame: DataFrame of selected simulation for selected zips.
+        tuple: (simulation_df, zip_df) - Selected simulation data and zip codes.
     """
-    zip_df = zip_df.sort_values(
-        'priority_score', 
-        ascending=False)
+    # Sort by priority score and select top N
+    zip_df = zip_df.sort_values('priority_score', ascending=False)
     zip_df = zip_df[0:zip_count]
+    
+    # TODO: Alternative selection logic
     # zip_df = zip_df.loc[
-    #         (zip_df['carrier_switch_package_count_cumsum'] <= package_count)
-    #         ]
+    #     (zip_df['carrier_switch_package_count_cumsum'] <= package_count)
+    # ]
     # zip_df = zip_df[
-    #     ['zip5','priority_score','reason_code_dea','reason_code_backlog']]\
-    #         .drop_duplicates()
+    #     ['zip5', 'priority_score', 'reason_code_dea', 'reason_code_backlog']
+    # ].drop_duplicates()
+    
     zip_df['selected'] = 1
+    
+    # Merge with simulation data
     simulation_df = simulation_df.merge(zip_df, on='zip5')
     simulation_df = simulation_df[[
        'order_id',
@@ -788,54 +1011,57 @@ def select_zips_and_get_simulation(
 
 if __name__ == '__main__':
 
-    # parameters
-    with open("./configs.yaml") as f:
+    # Load configuration parameters
+    with open("./configs.yaml", encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
-    RUN_DATE = '2025-10-11' # today().strftime('%Y-%m-%d')
+    RUN_DATE = date.today().strftime('%Y-%m-%d') # date.today().strftime('%Y-%m-%d')
     RUN_NAME = config['EXECUTION']['run_name']
 
-    expansion = config['EXECUTION']['expansion']
-    remediation = config['EXECUTION']['remediation']
+    EXPANSION = config['EXECUTION']['expansion']
+    REMEDIATION = config['EXECUTION']['remediation']
 
-    baseline_scenario = config['EXECUTION']['baseline_scenario']
-    expansion_scenario = config['EXECUTION']['expansion_scenario']
-    remediation_scenario = config['EXECUTION']['remediation_scenario']
+    BASELINE_SCENARIO = config['EXECUTION']['baseline_scenario']
+    EXPANSION_SCENARIO = config['EXECUTION']['expansion_scenario']
+    REMEDIATION_SCENARIO = config['EXECUTION']['remediation_scenario']
 
-    lookback_day_count = config['EXECUTION']['lookback_day_count']
-    start_date = config['EXECUTION']['start_date']
-    end_date = config['EXECUTION']['end_date']
+    LOOKBACK_DAY_COUNT = config['EXECUTION']['lookback_day_count']
+    START_DATE = config['EXECUTION']['start_date']
+    END_DATE = config['EXECUTION']['end_date']
 
-    recommendation_count_list = config['EXECUTION']['recommendation_count_list']
-    zip_volume_floor = config['EXECUTION']['zip_volume_floor']
-    fc_switch_threshold = config['EXECUTION']['fc_switch_threshold']
+    RECOMMENDATION_COUNT_LIST = config['EXECUTION']['recommendation_count_list']
+    ZIP_VOLUME_FLOOR = config['EXECUTION']['zip_volume_floor']
+    FC_SWITCH_THRESHOLD = config['EXECUTION']['fc_switch_threshold']
 
-    dea_threshold = config['EXECUTION']['dea_threshold']
-    dea_lookback_day_count = config['EXECUTION']['dea_lookback_day_count']
+    DEA_THRESHOLD = config['EXECUTION']['dea_threshold']
+    DEA_LOOKBACK_DAY_COUNT = config['EXECUTION']['dea_lookback_day_count']
 
-    backlog_threshold = config['EXECUTION']['backlog_threshold']
-    clear_date_threshold = config['EXECUTION']['clear_date_threshold']
+    BACKLOG_THRESHOLD = config['EXECUTION']['backlog_threshold']
+    CLEAR_DATE_THRESHOLD = config['EXECUTION']['clear_date_threshold']
 
     # set output paths
-    output_path = os.path.join('./results/execution', RUN_NAME)
-    metrics_path = os.path.join(output_path, 'metrics', RUN_DATE)
-    sim_path = os.path.join(output_path, 'simulation_output', RUN_DATE)
-    remediation_path = os.path.join(output_path, 'zips_to_remediate', RUN_DATE)
-    expansion_path = os.path.join(output_path, 'zips_to_expand', RUN_DATE)
+    OUTPUT_PATH = os.path.join('./results/execution', RUN_NAME)
+    METRICS_PATH = os.path.join(OUTPUT_PATH, 'metrics', RUN_DATE)
+    SIM_PATH = os.path.join(OUTPUT_PATH, 'simulation_output', RUN_DATE)
+    REMEDIATION_PATH = os.path.join(OUTPUT_PATH, 'zips_to_remediate', RUN_DATE)
+    EXPANSION_PATH = os.path.join(OUTPUT_PATH, 'zips_to_expand', RUN_DATE)
 
     # set start and end date for simulation data
-    if start_date and end_date:
+    if START_DATE and END_DATE:
         pass
     else:
-        end_date = date.today() - timedelta(days=1)
-        start_date = end_date - timedelta(days=lookback_day_count)
-        end_date = end_date.strftime('%Y-%m-%d')
-        start_date = start_date.strftime('%Y-%m-%d')
+        END_DATE = date.today()
+        START_DATE = END_DATE - timedelta(days=LOOKBACK_DAY_COUNT)
+        END_DATE = END_DATE.strftime('%Y-%m-%d')
+        START_DATE = START_DATE.strftime('%Y-%m-%d')
+
+    logger.info('Run date is set to: %s', RUN_DATE)
+    logger.info('Getting simulation data for: %s - %s ...', START_DATE, END_DATE)
 
     # load data
-    # baseline - remediation - expansion simulation
+    # baseline - remediation - expansion simulation - based on sim start andend date
     baseline_sim_df = read_helper(
-        os.path.join('./data/simulations', baseline_scenario),
+        os.path.join('./data/simulations', BASELINE_SCENARIO),
         cols=[
             'order_id',
             'order_placed_date',
@@ -853,8 +1079,8 @@ if __name__ == '__main__':
             'act_transit_cost',
             'std',
             'dea_flag'],
-        start_date=start_date,
-        end_date=end_date,
+        start_date=START_DATE,
+        end_date=END_DATE,
         col_names=[
             'order_id',
             'order_placed_date',
@@ -872,9 +1098,9 @@ if __name__ == '__main__':
             'act_transit_cost',
             'std',
             'dea_flag']
-        )
+    )
     remediate_sim_df = read_helper(
-        os.path.join('./data/simulations', remediation_scenario),
+        os.path.join('./data/simulations', REMEDIATION_SCENARIO),
         cols=[
             'order_id',
             'order_placed_date',
@@ -885,11 +1111,11 @@ if __name__ == '__main__':
             'sim_route',
             'sim_tnt',
             'sim_transit_cost'],
-        start_date=start_date,
-        end_date=end_date
-        )
+        start_date=START_DATE,
+        end_date=END_DATE
+    )
     expand_sim_df = read_helper(
-        os.path.join('./data/simulations', expansion_scenario),
+        os.path.join('./data/simulations', EXPANSION_SCENARIO),
         cols=[
             'order_id',
             'order_placed_date',
@@ -900,107 +1126,119 @@ if __name__ == '__main__':
             'sim_route',
             'sim_tnt',
             'sim_transit_cost'],
-        start_date=start_date,
-        end_date=end_date
-        )
+        start_date=START_DATE,
+        end_date=END_DATE
+    )
 
-    # dea / backlog / shutdown
+    # dea / backlog / shutdown - based on RUN_DATE
     dea_df = read_helper(
         './data/execution_data/unpadded_dea',
         start_date=(
-            pd.to_datetime(RUN_DATE) - timedelta(days=dea_lookback_day_count))\
+            pd.to_datetime(RUN_DATE) - timedelta(days=DEA_LOOKBACK_DAY_COUNT+1))\
                 .strftime('%Y-%m-%d'),
-        end_date=RUN_DATE,
-        date_col_name='delivery_date',
-        cols=['delivery_date',
+        end_date=(
+            pd.to_datetime(RUN_DATE) - timedelta(days=1))\
+                .strftime('%Y-%m-%d'),
+        date_col_name='unpadded_edd',
+        cols=['unpadded_edd',
               'ffmcenter_name',
               'carrier_code',
               'zip5',
               'package_count',
               'unpadded_edd_dea_count'
               ]
-        )
+    )
     backlog_df = read_helper(
         './data/execution_data/backlog',
         start_date=(pd.to_datetime(RUN_DATE) - timedelta(days=3)).strftime('%Y-%m-%d'),
         end_date=RUN_DATE,
         date_col_name='date'
-        )
+    )
 
-    # smf baseline - expansion
+    # smf baseline - expansion - based on sim start and end date
     smf_baseline_df = read_helper(
-        './data/smf/baseline',
-        start_date=start_date,
-        end_date=(pd.to_datetime(end_date) + timedelta(days=1)).strftime('%Y-%m-%d'),
+        os.path.join('./data/smf', BASELINE_SCENARIO),
+        start_date=START_DATE,
+        end_date=END_DATE,
         date_col_name='shipdate'
-        )
+    )
     smf_expansion_df = read_helper(
-        './data/smf/expansion',
-        start_date=start_date,
-        end_date=(pd.to_datetime(end_date) + timedelta(days=1)).strftime('%Y-%m-%d'),
+        os.path.join('./data/smf', EXPANSION_SCENARIO),
+        start_date=START_DATE,
+        end_date=END_DATE,
         date_col_name='shipdate'
-        )
+    )
 
-    # last recommendation if any
+    # last recommendation if any - based on RUN_DATE
     last_zip_recommendation = get_last_recommendation(
-       RUN_NAME,
-       RUN_DATE,
-       dea_threshold,
-       fc_switch_threshold,
-       zc=999999
-        )
+        RUN_NAME,
+        RUN_DATE,
+        DEA_THRESHOLD,
+        FC_SWITCH_THRESHOLD,
+        zip_count=999999
+    )
 
     # exclusion list if any
     # exclusion_list = read_helper()
 
-    # generate zip ONTRGD status
+    # Generate zip ONTRGD status - based on sim end date
+    # TODO: change to smf_expansion_df
     zip_status_df = get_zip_status(
         smf_baseline_df,
-        smf_expansion_df,
-        date=end_date
-        )
+        smf_baseline_df,  # smf_expansion_df
+        check_date=END_DATE
+    )
+
     logger.info(
         'ONTRGD zip count by active status: \n%s', 
         zip_status_df.groupby('active')['zip5'].count().to_string())
 
-    # apply decision rules and get candidate zips to remediate / expand for ONTRGD
+    # Apply decision rules and get candidate zips to remediate / expand for ONTRGD
+    # TODO: change to smf_expansion_df
     zips_to_remediate, zips_to_expand = get_zip_recommendation(
+        RUN_DATE,
+        RUN_NAME,
         zip_status_df,
         baseline_sim_df,
         remediate_sim_df,
         expand_sim_df,
         dea_df,
-        dea_threshold,
+        DEA_THRESHOLD,
         backlog_df,
-        backlog_threshold,
-        clear_date_threshold,
-        smf_expansion_df,
+        BACKLOG_THRESHOLD,
+        CLEAR_DATE_THRESHOLD,
+        smf_baseline_df,  # smf_expansion_df
         last_zip_recommendation,
-        )
+        FC_SWITCH_THRESHOLD,
+        ZIP_VOLUME_FLOOR
+    )
 
+    # Determine maximum zip count and filter recommendation count list
     ZIP_COUNT_MAX = 0
-    if zips_to_remediate.shape[0] > 0:
+    if zips_to_remediate.shape[0] > 0 and REMEDIATION:
         REMEDIATION = True
         ZIP_COUNT_MAX = max(ZIP_COUNT_MAX, zips_to_remediate.shape[0])
     else:
         REMEDIATION = False
-    if zips_to_expand.shape[0] > 0:
+
+    if zips_to_expand.shape[0] > 0 and EXPANSION:
         EXPANSION = True
         ZIP_COUNT_MAX = max(ZIP_COUNT_MAX, zips_to_expand.shape[0])
     else:
         EXPANSION = False
+
     filtered_list = [
-        item for item in recommendation_count_list
-            if item <= ZIP_COUNT_MAX]
+        item for item in RECOMMENDATION_COUNT_LIST if item <= ZIP_COUNT_MAX
+    ]
     filtered_list.append(999999)
 
+    # Select zips and get simulation result based on recommendation zip count
+    for zip_count in filtered_list:
 
-    # select zips and get simulation result based on recommendation zip count
-    for zc in filtered_list:
+        logger.info('recommendation zip count: %i', zip_count)
 
-        logger.info('recommendation zip count: %i', zc)
-
-        SETTING_NAME = f'dea_th_{dea_threshold}_fc_switch_{fc_switch_threshold}_rec_count_{zc}'
+        SETTING_NAME = \
+            f'dea_th_{DEA_THRESHOLD}_fc_switch_{FC_SWITCH_THRESHOLD}_rec_count_{zip_count}'
 
         baseline_sim_df_no_change = baseline_sim_df.copy()
 
@@ -1008,7 +1246,8 @@ if __name__ == '__main__':
             remediate_sim_df_temp, remediate_zips_temp = select_zips_and_get_simulation(
                 remediate_sim_df,
                 zips_to_remediate,
-                zc)
+                zip_count
+            )
             logger.info('remediated zip count: %i', remediate_zips_temp.shape[0])
 
             baseline_sim_df_no_change = baseline_sim_df_no_change.merge(
@@ -1023,14 +1262,16 @@ if __name__ == '__main__':
                     )
 
             baseline_sim_df_no_change = baseline_sim_df_no_change.loc[
-                baseline_sim_df_no_change['selected'].isnull()]
-            baseline_sim_df_no_change = baseline_sim_df_no_change.drop('selected',axis=1)
+                baseline_sim_df_no_change['selected'].isnull()
+            ]
+            baseline_sim_df_no_change = baseline_sim_df_no_change.drop('selected', axis=1)
 
         if EXPANSION:
             expand_sim_df_temp, expand_zips_temp = select_zips_and_get_simulation(
                 expand_sim_df,
                 zips_to_expand,
-                zc)
+                zip_count
+            )
             logger.info('expanded zip count: %i', expand_zips_temp.shape[0])
 
             baseline_sim_df_no_change = baseline_sim_df_no_change.merge(
@@ -1044,11 +1285,11 @@ if __name__ == '__main__':
                     )
 
             baseline_sim_df_no_change = baseline_sim_df_no_change.loc[
-                baseline_sim_df_no_change['selected'].isnull()]
-            baseline_sim_df_no_change = baseline_sim_df_no_change.drop('selected',axis=1)
+                baseline_sim_df_no_change['selected'].isnull()
+            ]
+            baseline_sim_df_no_change = baseline_sim_df_no_change.drop('selected', axis=1)
 
-
-        # generate final simulation result with expand / remediate decisions
+        # Generate final simulation result with expand / remediate decisions
         final_sim_df = baseline_sim_df_no_change[[
             'order_id',
             'order_placed_date',
@@ -1059,7 +1300,7 @@ if __name__ == '__main__':
             'base_route',
             'base_tnt',
             'base_transit_cost'
-            ]]
+        ]]
         final_sim_df.columns = [
             'order_id',
             'order_placed_date',
@@ -1069,44 +1310,48 @@ if __name__ == '__main__':
             'sim_carrier_code',
             'sim_route',
             'sim_tnt',
-            'sim_transit_cost']
+            'sim_transit_cost'
+        ]
 
         if REMEDIATION:
             final_sim_df = pd.concat([final_sim_df, remediate_sim_df_temp])
         if EXPANSION:
             final_sim_df = pd.concat([final_sim_df, expand_sim_df_temp])
 
-        # calculate & save all metrics
-        # save recommendations
+        # Calculate and save all metrics
+        if not os.path.exists(OUTPUT_PATH):
+            os.makedirs(OUTPUT_PATH)
+        if not os.path.exists(METRICS_PATH):
+            os.makedirs(METRICS_PATH)
 
-        if not os.path.exists(output_path):
-            os.makedirs(output_path)
-
-        if not os.path.exists(metrics_path):
-            os.makedirs(metrics_path)
-
-        # estimate network level ONTRGD % before wms proxy
+        # Estimate network level ONTRGD % before WMS proxy
         carrier_change = calculate_package_distribution_change_by_groups(
             baseline_sim_df.rename(
-                columns={'base_carrier_code': 'sim_carrier_code'}, inplace=False),
+                columns={'base_carrier_code': 'sim_carrier_code'},
+                inplace=False
+            ),
             final_sim_df,
             ['sim_carrier_code'],
             'shipment_tracking_number',
             'nunique'
-            )
-        print('NETWORK LEVEL ONTRGD % - BEFORE WMS PROXY')
-        print(carrier_change)
+        )
+        logger.info('NETWORK LEVEL ONTRGD %% - BEFORE WMS PROXY\n%s', carrier_change.to_string())
 
-        # estimate network level ONTRGD % after wms proxy
+        # Estimate network level ONTRGD % after WMS proxy
         baseline_sim_df_proxy = apply_wms_proxy(
             baseline_sim_df.rename(
-                columns={'base_carrier_code': 'sim_carrier_code',
-                        'base_fc_name': 'sim_fc_name'
-                        }, inplace=False),
-            'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_0925_v2;')
+                columns={
+                    'base_carrier_code': 'sim_carrier_code',
+                    'base_fc_name': 'sim_fc_name'
+                },
+                inplace=False
+            ),
+            'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1030;'
+        )
         final_sim_df_proxy = apply_wms_proxy(
             final_sim_df,
-            'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_0925_v2;')
+            'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1030;'
+        )
 
         carrier_change_proxy = calculate_package_distribution_change_by_groups(
             baseline_sim_df_proxy,
@@ -1114,64 +1359,77 @@ if __name__ == '__main__':
             ['carrier'],
             'package_count',
             'sum'
-            )
-        print('NETWORK LEVEL ONTRGD % - AFTER WMS PROXY')
-        print(carrier_change_proxy)
+        )
+        logger.info('NETWORK LEVEL ONTRGD %% - AFTER WMS PROXY\n%s',
+        carrier_change_proxy.to_string())
 
-        # estimate fc charge changes
-        print('FC CHARGE CHANGES')
+        # Estimate cost saving
+        cost_saving = calculate_cost_change(
+            baseline_sim_df,
+            final_sim_df,
+        )
+        cost_saving = pd.DataFrame({'cost_saving_iter-base': [cost_saving]})
+        logger.info('COST SAVING (ITER - BASE)\n%s', cost_saving)
+
+        # Estimate FC charge changes
         fc_charge_change = calculate_package_distribution_change_by_groups(
             baseline_sim_df.rename(
-                columns={'base_fc_name': 'sim_fc_name'}, inplace=False),
+                columns={'base_fc_name': 'sim_fc_name'},
+                inplace=False
+            ),
             final_sim_df,
             ['sim_fc_name'],
             'shipment_tracking_number',
-            'nunique')
-        print(fc_charge_change)
+            'nunique'
+        )
+        logger.info('FC CHARGE CHANGES\n%s', fc_charge_change.to_string())
 
-        excel_file_path = os.path.join(metrics_path, SETTING_NAME + '.xlsx')
+        # Save metrics to Excel
+        excel_file_path = os.path.join(METRICS_PATH, SETTING_NAME + '.xlsx')
         with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
             carrier_change.to_excel(
-                writer, 
-                sheet_name='carrier_network_before_wms_proxy', 
-                index=False)
+                writer,
+                sheet_name='carrier_net_before_wms_proxy',
+                index=False,
+                na_rep=''
+            )
             carrier_change_proxy.to_excel(
-                writer, 
-                sheet_name='carrier_network_after_wms_proxy', 
-                index=False)
+                writer,
+                sheet_name='carrier_net_after_wms_proxy',
+                index=False,
+                na_rep=''
+            )
+            cost_saving.to_excel(
+                writer,
+                sheet_name='cost_saving',
+                index=False,
+                na_rep=''
+            )
             fc_charge_change.to_excel(
-                writer, 
-                sheet_name='fc_charge_changes', 
-                index=False)
-
+                writer,
+                sheet_name='fc_charge_changes',
+                index=False,
+                na_rep=''
+            )
 
         # Save final simulation
-        if not os.path.exists(sim_path):
-            os.makedirs(sim_path)
-
+        if not os.path.exists(SIM_PATH):
+            os.makedirs(SIM_PATH)
         final_sim_df.to_parquet(
-            os.path.join(sim_path,
-                        f'{SETTING_NAME}.parquet'
-                        )
-            )
+            os.path.join(SIM_PATH, f'{SETTING_NAME}.parquet')
+        )
 
         # Save zip recommendations
         if EXPANSION:
-            if not os.path.exists(expansion_path):
-                os.makedirs(expansion_path)
-
+            if not os.path.exists(EXPANSION_PATH):
+                os.makedirs(EXPANSION_PATH)
             expand_zips_temp.to_parquet(
-                os.path.join(expansion_path,
-                            f'{SETTING_NAME}.parquet'
-                            )
+                os.path.join(EXPANSION_PATH, f'{SETTING_NAME}.parquet')
             )
 
         if REMEDIATION:
-            if not os.path.exists(remediation_path):
-                os.makedirs(remediation_path)
-
+            if not os.path.exists(REMEDIATION_PATH):
+                os.makedirs(REMEDIATION_PATH)
             remediate_zips_temp.to_parquet(
-                os.path.join(remediation_path,
-                            f'{SETTING_NAME}.parquet'
-                            )
+                os.path.join(REMEDIATION_PATH, f'{SETTING_NAME}.parquet')
             )

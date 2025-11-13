@@ -1,9 +1,10 @@
-import pandas as pd
-from snowflake_utils import execute_query_and_return_formatted_data, execute_query
 import os
-from datetime import date, timedelta
 import logging
+from datetime import date, timedelta
+
 import yaml
+
+from snowflake_utils import execute_query_and_return_formatted_data
 
 
 # Get a logger instance
@@ -34,7 +35,7 @@ def get_unpadded_dea(
         os.makedirs(output_path)
 
     df = execute_query_and_return_formatted_data(
-        query_path='./data',
+        query_path='./sql',
         query_name='unpadded_edd_dea',
         start_date=s,
         end_date=e,
@@ -42,7 +43,7 @@ def get_unpadded_dea(
 
     df.to_parquet(
         os.path.join(output_path),
-        partition_cols='delivery_date',
+        partition_cols='unpadded_edd',
         existing_data_behavior='delete_matching'
         )
 
@@ -68,7 +69,7 @@ def get_backlog(
         os.makedirs(output_path)
 
     df = execute_query_and_return_formatted_data(
-        query_path='./data',
+        query_path='./sql',
         query_name='backlog',
         start_date=s,
         end_date=e,
@@ -85,32 +86,32 @@ def get_backlog(
 
 if __name__ == '__main__':
 
-    with open("./configs.yaml") as f:
+    with open("./configs.yaml", encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
-    lookback_day_count = config['EXECUTION_DATA']['lookback_day_count']
-    start_date = config['EXECUTION_DATA']['start_date']
-    end_date = config['EXECUTION_DATA']['end_date']
+    LOOKBACK_DAY_COUNT = config['EXECUTION_DATA']['lookback_day_count']
+    START_DATE = config['EXECUTION_DATA']['start_date']
+    END_DATE = config['EXECUTION_DATA']['end_date']
 
-    if start_date and end_date:
+    if START_DATE and END_DATE:
         pass
     else:
-        end_date = date.today()
-        start_date = end_date - timedelta(days=lookback_day_count)
-        end_date = end_date.strftime('%Y-%m-%d')
-        start_date = start_date.strftime('%Y-%m-%d')
+        END_DATE = date.today()
+        START_DATE = END_DATE - timedelta(days=LOOKBACK_DAY_COUNT)
+        END_DATE = END_DATE.strftime('%Y-%m-%d')
+        START_DATE = START_DATE.strftime('%Y-%m-%d')
 
-    logger.info('Running for %s - %s ...', start_date, end_date)
+    logger.info('Running for %s - %s ...', START_DATE, END_DATE)
 
     get_unpadded_dea(
         './data/execution_data/unpadded_dea',
-        s=start_date,
-        e=end_date
+        s=START_DATE,
+        e=END_DATE
         )
 
     get_backlog(
         './data/execution_data/backlog',
-        s=start_date,
-        e=end_date
+        s=START_DATE,
+        e=END_DATE
         )
 

@@ -1,5 +1,5 @@
 
-create or replace table edldb_dev.sc_promise_sandbox.simulation_smf as
+create or replace temporary table edldb_dev.sc_promise_sandbox.simulation_smf as
 with base as (
 
     select 
@@ -22,10 +22,10 @@ with base as (
                 'CLT1','MCO1','MCI1','DAY1',
                 'CFC1','PHX1','RNO1','DFW1',
                 'HOU1')
-        and mode in ('FDXHD')
+        and mode in ('FDXHD','ONTRGD')
         and orsitemtype = 'N'
         and ship_date >= date({start_date})
-        and ship_date <= date({end_date})
+        and ship_date <= dateadd('day', 3, date({end_date}))
 
 )
 

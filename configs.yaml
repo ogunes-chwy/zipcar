@@ -1,31 +1,32 @@
 SIMULATION: # pulling baseline - prd / all expand / all remediate simulation scenarios daily + actuals
-  simulation_scenario: ['baseline', 'remediation', 'expansion']
-  lookback_day_count: null # if start date and end date is given, then lookback_day_count is overwritten
-  start_date: '2025-10-05' # inclusive
-  end_date: '2025-10-11' # inclusive
+  simulation_scenario: ['baseline', 'remediation'] # 'baseline', 'remediation', 'expansion'
+  lookback_day_count: 7 # if start date and end date is given, then lookback_day_count is overwritten
+  start_date: null # '2025-11-01' # inclusive
+  end_date: null #'2025-11-07' # inclusive
 
 
 EXECUTION_DATA: # pulling unpadded dea / shutdown / backlog daily
-  lookback_day_count: null # if start date and end date is given, then lookback_day_count is overwritten
-  start_date: '2025-10-05' # inclusive
-  end_date: '2025-10-11' # inclusive
+  lookback_day_count: 14 # if start date and end date is given, then lookback_day_count is overwritten
+  start_date: null # '2025-10-25' # inclusive
+  end_date: null # '2025-11-08' # inclusive
 
 
 EXECUTION:
   run_name: 'default'
 
-  expansion: True
+  expansion: False
   remediation: True
 
-  lookback_day_count: null # if start date and end date is given, then lookback_day_count is overwritten
-  start_date: '2025-10-05' # inclusive
-  end_date: '2025-10-11' # inclusive
+  # this dates are used to get the simulation data & define zip status based on smf
+  lookback_day_count: 7 # if start date and end date is given, then lookback_day_count is overwritten
+  start_date: null # '2025-11-07' # inclusive
+  end_date: null #'2025-11-13' # inclusive
 
   baseline_scenario: 'baseline' 
   expansion_scenario: 'expansion'
   remediation_scenario: 'remediation'
 
-  recommendation_count_list: [500,  300, 200, 100, 50]
+  recommendation_count_list: []
   zip_volume_floor: 25
   fc_switch_threshold: 0.15
 

@@ -24,8 +24,8 @@ with base as (
                 'HOU1')
         and mode in ('FDXHD','ONTRGD')
         and orsitemtype = 'N'
-        and ship_date >= {start_date}
-        and ship_date <= {end_date}
+        and ship_date >= date({start_date})
+        and ship_date <= dateadd('day', 3, date({end_date}))
 
 )
 
@@ -76,8 +76,8 @@ with base as (
         edldb_dev.sc_promise_sandbox.ontrgd_eligible_zip_smf_MMruleApplied_0831_1010 smf 
     where 
         smf.fcname != 'HOU1'
-        and shipdate >= {start_date}
-        and shipdate < {end_date}
+        and shipdate >= date({start_date})
+        and shipdate <= dateadd('day', 3, date({end_date}))
 )
 
     select distinct

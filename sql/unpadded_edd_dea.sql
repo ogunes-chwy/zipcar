@@ -1,3 +1,21 @@
+select 
+    unpadded_edd
+    ,fc as ffmcenter_name
+    ,carrier_code as carrier_code
+    ,zip as zip5
+    ,sum(package_total_unpadded) - sum(package_failures_unpadded_carrier_controllable) as unpadded_edd_dea_count
+    ,sum(package_total_unpadded) as package_count
+from
+    edldb.sc_operations_sandbox.obp_package_failures_unpadded_summary
+where 
+    fc in ('AVP1','AVP2','CFC1','CLT1','DAY1','DFW1','MCI1','MCO1','MDT1','PHX1','RNO1','BNA1','HOU1')
+    and unpadded_edd >= date({start_date})
+    and unpadded_edd <= date({end_date})
+group by
+    1,2,3,4
+;
+
+/*
 with base as (
     select distinct --st.order_id,
            st.shipment_tracking_number,
@@ -122,3 +140,4 @@ select delivery_date,
 from granular
 group by delivery_date,ffmcenter_name,carrier_code,zip5
 ;
+*/

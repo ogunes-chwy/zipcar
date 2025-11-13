@@ -41,21 +41,21 @@ def generate_ship_map_file(
     # read SMF table creation SQL
     if scenario == 'baseline':
         with open(
-            "data/create_smf_tables/smf_baseline.sql", 
+            "sql/create_smf_tables/smf_baseline.sql", 
             encoding='utf-8'
             ) as f:
             sql_text = f.read()
 
     elif scenario == 'remediation':
         with open(
-            "data/create_smf_tables/smf_remediation.sql", 
+            "sql/create_smf_tables/smf_remediation.sql", 
             encoding='utf-8'
             ) as f:
             sql_text = f.read()
 
     elif scenario == 'expansion':
         with open(
-            "data/create_smf_tables/smf_expansion.sql", 
+            "sql/create_smf_tables/smf_expansion.sql", 
             encoding='utf-8'
             ) as f:
             sql_text = f.read()
@@ -105,21 +105,21 @@ def simulation(
     # read SMF table creation SQL
     if scenario == 'baseline':
         with open(
-            "data/create_smf_tables/smf_baseline.sql", 
+            "sql/create_smf_tables/smf_baseline.sql", 
             encoding='utf-8'
             ) as f:
             sql_text_smf = f.read()
 
     elif scenario == 'remediation':
         with open(
-            "data/create_smf_tables/smf_remediation.sql", 
+            "sql/create_smf_tables/smf_remediation.sql", 
             encoding='utf-8'
             ) as f:
             sql_text_smf = f.read()
 
     elif scenario == 'expansion':
         with open(
-            "data/create_smf_tables/smf_expansion.sql", 
+            "sql/create_smf_tables/smf_expansion.sql", 
             encoding='utf-8'
             ) as f:
             sql_text_smf = f.read()
@@ -128,7 +128,7 @@ def simulation(
         raise ValueError(f"Invalid scenario: {scenario}")
 
     # read simulation SQL
-    with open("data/run_simulation.sql", encoding='utf-8') as f:
+    with open("sql/run_simulation.sql", encoding='utf-8') as f:
         sql_text_sim = f.read()
 
     # combine SMF table creation and simulation SQL
@@ -156,39 +156,37 @@ if __name__ == '__main__':
     with open("./configs.yaml", encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
-    simulation_scenario = config['SIMULATION']['simulation_scenario']
-    lookback_day_count = config['SIMULATION']['lookback_day_count']
-    start_date = config['SIMULATION']['start_date']
-    end_date = config['SIMULATION']['end_date']
+    SIMULATION_SCENARIO = config['SIMULATION']['simulation_scenario']
+    LOOKBACK_DAY_COUNT = config['SIMULATION']['lookback_day_count']
+    START_DATE = config['SIMULATION']['start_date']
+    END_DATE = config['SIMULATION']['end_date']
 
     # if start date and end date are not provided,
     # use lookback day count to calculate start and end date from today
-    if start_date and end_date:
+    if START_DATE and END_DATE:
         pass
     else:
-        end_date = date.today()
-        start_date = end_date - timedelta(days=lookback_day_count)
-        end_date = end_date.strftime('%Y-%m-%d')
-        start_date = start_date.strftime('%Y-%m-%d')
-
-    end_date_smf = (pd.to_datetime(end_date) + timedelta(days=3)).strftime('%Y-%m-%d')
+        END_DATE = date.today()
+        START_DATE = END_DATE - timedelta(days=LOOKBACK_DAY_COUNT)
+        END_DATE = END_DATE.strftime('%Y-%m-%d')
+        START_DATE = START_DATE.strftime('%Y-%m-%d')
 
     # run simulation for each scenario
-    for scenario in simulation_scenario:
+    for scenario in SIMULATION_SCENARIO:
 
-        logger.info('Running %s for %s - %s ...', scenario, start_date, end_date)
+        logger.info('Running %s for %s - %s ...', scenario, START_DATE, END_DATE)
 
 
         generate_ship_map_file(
             output_path='./data/smf/',
             scenario=scenario,
-            s=start_date,
-            e=end_date_smf
+            s=START_DATE,
+            e=END_DATE
             )
 
         simulation(
             output_path='./data/simulations/',
             scenario=scenario,
-            s=start_date,
-            e=end_date
+            s=START_DATE,
+            e=END_DATE
             )
