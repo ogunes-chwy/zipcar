@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_zip_status(
+def get_zip_status(  # pylint: disable=redefined-outer-name
         smf_baseline_df,
         smf_expansion_df,
         check_date
@@ -63,7 +63,7 @@ def get_zip_status(
     return eligible_ontrgd
 
 
-def get_last_recommendation(
+def get_last_recommendation(  # pylint: disable=redefined-outer-name
         run_name,
         run_date,
         dea_threshold,
@@ -154,7 +154,7 @@ def get_last_recommendation(
     return prev_zip_recommendation
 
 
-def calculate_zip_volume_daily(baseline_sim_df):
+def calculate_zip_volume_daily(baseline_sim_df):  # pylint: disable=redefined-outer-name
     """
     Calculate average daily package volume per zip code.
 
@@ -174,7 +174,7 @@ def calculate_zip_volume_daily(baseline_sim_df):
     return demand_by_zip
 
 
-def calculate_fc_carrier_switch(baseline_sim_df, iteration_sim_df):
+def calculate_fc_carrier_switch(baseline_sim_df, iteration_sim_df):  # pylint: disable=redefined-outer-name
     """
     Calculate FC and carrier switch metrics between baseline and iteration simulations.
 
@@ -241,7 +241,7 @@ def calculate_fc_carrier_switch(baseline_sim_df, iteration_sim_df):
     return fc_carrier_switch
 
 
-def calculate_tnt_by_carrier_dow(baseline_sim_df, smf_expansion_df):
+def calculate_tnt_by_carrier_dow(baseline_sim_df, smf_expansion_df):  # pylint: disable=redefined-outer-name
     """
     Calculate average adjusted transit time (adjtnt) by day of week, zip, and carrier.
 
@@ -292,7 +292,7 @@ def calculate_tnt_by_carrier_dow(baseline_sim_df, smf_expansion_df):
     return adjtnt_df_avg
 
 
-def generate_reason_dea(dea_df, dea_threshold):
+def generate_reason_dea(dea_df, dea_threshold):  # pylint: disable=redefined-outer-name
     """
     Generate DEA reason codes based on unpadded EDD DEA metrics.
 
@@ -371,7 +371,7 @@ def generate_reason_dea(dea_df, dea_threshold):
     return dea_df_agg_p
 
 
-def generate_reason_backlog(
+def generate_reason_backlog(  # pylint: disable=redefined-outer-name
         baseline_sim_df,
         backlog_df,
         backlog_threshold,
@@ -478,7 +478,7 @@ def generate_reason_backlog(
     return clear_df_p
 
 
-def generate_reason_shutdown(
+def generate_reason_shutdown(  # pylint: disable=redefined-outer-name
         run_date,
         shutdown_df,
         clear_date_threshold,
@@ -757,7 +757,7 @@ def calculate_priority_score(df):
     return df
 
 
-def get_zip_recommendation(
+def get_zip_recommendation(  # pylint: disable=redefined-outer-name
         RUN_DATE,
         RUN_NAME,
         zip_status_df,
@@ -902,7 +902,7 @@ def get_zip_recommendation(
     # apply exclusion list
     # (Currently not implemented)
 
-    ## STEP 5: Save intermediate results
+    ## STEP 5: Save intermediate results for debugging purposes
 
     if not os.path.exists(f'./results/execution/{RUN_NAME}/metadata/{RUN_DATE}'):
         os.makedirs(f'./results/execution/{RUN_NAME}/metadata/{RUN_DATE}')
@@ -953,20 +953,25 @@ def get_zip_recommendation(
     zips_to_recommend_remediate = calculate_priority_score(zips_to_recommend_remediate)
     zips_to_recommend_expand = calculate_priority_score(zips_to_recommend_expand)
 
-    # Select final columns
+    # Select final columns and add informative columns
     zips_to_recommend_remediate = zips_to_recommend_remediate[cols + ['priority_score']]
     zips_to_recommend_expand = zips_to_recommend_expand[cols + ['priority_score']]
 
-    # Save final intermediate outputs
-    zips_to_recommend_remediate.to_parquet(
-        f'./results/execution/{RUN_NAME}/metadata/{RUN_DATE}/zips_to_recommend_remediate.parquet')
-    zips_to_recommend_expand.to_parquet(
-        f'./results/execution/{RUN_NAME}/metadata/{RUN_DATE}/zips_to_recommend_expand.parquet')
+    info_cols = ['zip5','fc_switch_package_per',
+                 'FDXHD_act_package_count','ONTRGD_act_package_count',
+                 'FDXHD_unpadded_edd_dea','ONTRGD_unpadded_edd_dea',
+                 'FDXHD_days_behind','ONTRGD_days_behind']
+    zips_to_recommend = zips_to_recommend[info_cols]
+
+    zips_to_recommend_remediate = zips_to_recommend_remediate.merge(
+        zips_to_recommend, on='zip5', how='left')
+    zips_to_recommend_expand = zips_to_recommend_expand.merge(
+        zips_to_recommend, on='zip5', how='left')
 
     return zips_to_recommend_remediate, zips_to_recommend_expand
 
 
-def select_zips_and_get_simulation(simulation_df, zip_df, zip_count):
+def select_zips_and_get_simulation(simulation_df, zip_df, zip_count):  # pylint: disable=redefined-outer-name
     """
     Select top N zip codes by priority score and return corresponding simulation data.
 
@@ -1254,6 +1259,8 @@ if __name__ == '__main__':
                 remediate_zips_temp,
                 on='zip5',
                 how='left')
+            remediate_zips_temp = remediate_zips_temp.drop('selected', axis=1)
+
             logger.info('carrier switch package count: %i',
                 baseline_sim_df_no_change.loc[
                     (baseline_sim_df_no_change['base_carrier_code'] == 'ONTRGD')
@@ -1278,6 +1285,7 @@ if __name__ == '__main__':
                 expand_zips_temp,
                 on='zip5',
                 how='left')
+            expand_zips_temp = expand_zips_temp.drop('selected', axis=1)
 
             logger.info('carrier switch package count: %i',
                 expand_sim_df_temp.loc[expand_sim_df_temp['sim_carrier_code'] == 'ONTRGD'].groupby(
@@ -1426,10 +1434,18 @@ if __name__ == '__main__':
             expand_zips_temp.to_parquet(
                 os.path.join(EXPANSION_PATH, f'{SETTING_NAME}.parquet')
             )
+            expand_zips_temp.to_csv(
+                os.path.join(EXPANSION_PATH, f'{SETTING_NAME}.csv'),
+                index=False
+            )
 
         if REMEDIATION:
             if not os.path.exists(REMEDIATION_PATH):
                 os.makedirs(REMEDIATION_PATH)
             remediate_zips_temp.to_parquet(
                 os.path.join(REMEDIATION_PATH, f'{SETTING_NAME}.parquet')
+            )
+            remediate_zips_temp.to_csv(
+                os.path.join(REMEDIATION_PATH, f'{SETTING_NAME}.csv'),
+                index=False
             )
