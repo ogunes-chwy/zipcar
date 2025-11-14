@@ -4,6 +4,7 @@ from datetime import date, timedelta
 import pandas as pd
 import yaml
 from sklearn.preprocessing import MinMaxScaler
+from pathlib import Path
 from metric_helper import (
     read_helper,
     calculate_package_distribution_change_by_groups,
@@ -67,8 +68,7 @@ def get_last_recommendation(  # pylint: disable=redefined-outer-name
         run_name,
         run_date,
         dea_threshold,
-        fc_switch_threshold,
-        zip_count=999999
+        fc_switch_threshold
     ):
     """
     Retrieve previous zip recommendations from remediation and expansion directories.
@@ -91,7 +91,7 @@ def get_last_recommendation(  # pylint: disable=redefined-outer-name
         columns=['zip5', 'last_recommendation', 'recommendation_date',
                 'last_reason_dea', 'last_reason_shutdown', 'last_reason_backlog']
     )
-    filename = f'dea_th_{dea_threshold}_fc_switch_{fc_switch_threshold}_rec_count_{zip_count}.parquet'
+    
     output_cols = ['zip5', 'last_recommendation', 'recommendation_date',
                    'last_reason_dea', 'last_reason_shutdown', 'last_reason_backlog']
     input_cols = ['zip5', 'final_recommendation', 'recommendation_date',
@@ -124,7 +124,9 @@ def get_last_recommendation(  # pylint: disable=redefined-outer-name
             # Read all parquet files for valid dates
             prev_zips = pd.DataFrame()
             for prev_date in prev_dates:
-                file_path = os.path.join(directory_path, prev_date, filename)
+                main_path = Path(os.path.join(directory_path, prev_date))
+                file_name = list(main_path.glob(f'dea_th_{dea_threshold}_fc_sw_{fc_switch_threshold}*all.parquet'))
+                file_path = file_name[0]
                 if os.path.exists(file_path):
                     temp_df = pd.read_parquet(file_path)
                     temp_df['recommendation_date'] = prev_date
@@ -584,7 +586,7 @@ def resolve_current_decision(row):
     """
     Resolve current recommendation based on reason codes with priority order.
 
-    Priority: DEA > Shutdown > Backlog > OK
+    Priority: Shutdown > DEA > Backlog > OK
 
     Args:
         row: Row of DataFrame containing zip codes to activate or deactivate.
@@ -596,21 +598,21 @@ def resolve_current_decision(row):
     reason_shutdown = row.get('reason_code_shutdown', None)
     reason_backlog = row.get('reason_code_backlog', None)
 
-    # DEA ALWAYS takes precedence
-    if reason_dea in ['activate', 'deactivate']:
-        return pd.Series({
-            'current_recommendation': reason_dea,
-            'current_reason_dea': reason_dea,
-            'current_reason_shutdown': None,
-            'current_reason_backlog': None
-        })
-
-    # Shutdown next (ONLY IF dea is not activate/deactivate)
+    # Shutdown ALWAYS takes precedence
     if reason_shutdown in ['activate', 'deactivate']:
         return pd.Series({
             'current_recommendation': reason_shutdown,
             'current_reason_dea': None,
             'current_reason_shutdown': reason_shutdown,
+            'current_reason_backlog': None
+        })
+
+    # DEA next (ONLY IF shutdown is not activate/deactivate)
+    if reason_dea in ['activate', 'deactivate']:
+        return pd.Series({
+            'current_recommendation': reason_dea,
+            'current_reason_dea': reason_dea,
+            'current_reason_shutdown': None,
             'current_reason_backlog': None
         })
 
@@ -1020,7 +1022,7 @@ if __name__ == '__main__':
     with open("./configs.yaml", encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
-    RUN_DATE = date.today().strftime('%Y-%m-%d') # date.today().strftime('%Y-%m-%d')
+    RUN_DATE = '2025-11-14' # date.today().strftime('%Y-%m-%d') # date.today().strftime('%Y-%m-%d')
     RUN_NAME = config['EXECUTION']['run_name']
 
     EXPANSION = config['EXECUTION']['expansion']
@@ -1179,10 +1181,9 @@ if __name__ == '__main__':
         RUN_NAME,
         RUN_DATE,
         DEA_THRESHOLD,
-        FC_SWITCH_THRESHOLD,
-        zip_count=999999
+        FC_SWITCH_THRESHOLD
     )
-
+    print(last_zip_recommendation.head())
     # exclusion list if any
     # exclusion_list = read_helper()
 
@@ -1240,10 +1241,10 @@ if __name__ == '__main__':
     # Select zips and get simulation result based on recommendation zip count
     for zip_count in filtered_list:
 
-        logger.info('recommendation zip count: %i', zip_count)
+        logger.info('scoping zip count: %i', zip_count)
 
-        SETTING_NAME = \
-            f'dea_th_{DEA_THRESHOLD}_fc_switch_{FC_SWITCH_THRESHOLD}_rec_count_{zip_count}'
+        REMEDIATION_ZIP_COUNT = 0
+        EXPANSION_ZIP_COUNT = 0
 
         baseline_sim_df_no_change = baseline_sim_df.copy()
 
@@ -1254,6 +1255,7 @@ if __name__ == '__main__':
                 zip_count
             )
             logger.info('remediated zip count: %i', remediate_zips_temp.shape[0])
+            REMEDIATION_ZIP_COUNT = remediate_zips_temp.shape[0]
 
             baseline_sim_df_no_change = baseline_sim_df_no_change.merge(
                 remediate_zips_temp,
@@ -1280,7 +1282,8 @@ if __name__ == '__main__':
                 zip_count
             )
             logger.info('expanded zip count: %i', expand_zips_temp.shape[0])
-
+            EXPANSION_ZIP_COUNT = expand_zips_temp.shape[0]
+            
             baseline_sim_df_no_change = baseline_sim_df_no_change.merge(
                 expand_zips_temp,
                 on='zip5',
@@ -1296,7 +1299,7 @@ if __name__ == '__main__':
                 baseline_sim_df_no_change['selected'].isnull()
             ]
             baseline_sim_df_no_change = baseline_sim_df_no_change.drop('selected', axis=1)
-
+        
         # Generate final simulation result with expand / remediate decisions
         final_sim_df = baseline_sim_df_no_change[[
             'order_id',
@@ -1392,6 +1395,9 @@ if __name__ == '__main__':
         )
         logger.info('FC CHARGE CHANGES\n%s', fc_charge_change.to_string())
 
+        SETTING_NAME = \
+            f'dea_th_{DEA_THRESHOLD}_fc_sw_{FC_SWITCH_THRESHOLD}_rem_zip_{REMEDIATION_ZIP_COUNT}_exp_zip_{EXPANSION_ZIP_COUNT}'
+
         # Save metrics to Excel
         excel_file_path = os.path.join(METRICS_PATH, SETTING_NAME + '.xlsx')
         with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
@@ -1427,10 +1433,18 @@ if __name__ == '__main__':
             os.path.join(SIM_PATH, f'{SETTING_NAME}.parquet')
         )
 
+        ALL_ZIP_TAG = ''
+        if zip_count == 999999:
+            ALL_ZIP_TAG = '_all'
+
         # Save zip recommendations
         if EXPANSION:
             if not os.path.exists(EXPANSION_PATH):
                 os.makedirs(EXPANSION_PATH)
+
+            SETTING_NAME = \
+            f'dea_th_{DEA_THRESHOLD}_fc_sw_{FC_SWITCH_THRESHOLD}_exp_zip_{EXPANSION_ZIP_COUNT}{ALL_ZIP_TAG}'
+
             expand_zips_temp.to_parquet(
                 os.path.join(EXPANSION_PATH, f'{SETTING_NAME}.parquet')
             )
@@ -1442,6 +1456,10 @@ if __name__ == '__main__':
         if REMEDIATION:
             if not os.path.exists(REMEDIATION_PATH):
                 os.makedirs(REMEDIATION_PATH)
+
+            SETTING_NAME = \
+            f'dea_th_{DEA_THRESHOLD}_fc_sw_{FC_SWITCH_THRESHOLD}_rem_zip_{REMEDIATION_ZIP_COUNT}{ALL_ZIP_TAG}'
+
             remediate_zips_temp.to_parquet(
                 os.path.join(REMEDIATION_PATH, f'{SETTING_NAME}.parquet')
             )
