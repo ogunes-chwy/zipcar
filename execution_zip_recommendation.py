@@ -1,10 +1,13 @@
 import os
+from pathlib import Path
 import logging
-from datetime import date, timedelta
+import json
+from datetime import date, timedelta, datetime
 import pandas as pd
 import yaml
 from sklearn.preprocessing import MinMaxScaler
-from pathlib import Path
+from snowflake_utils import insert_data_to_snowflake,execute_query_and_return_formatted_data
+
 from metric_helper import (
     read_helper,
     calculate_package_distribution_change_by_groups,
@@ -65,95 +68,74 @@ def get_zip_status(  # pylint: disable=redefined-outer-name
 
 
 def get_last_recommendation(  # pylint: disable=redefined-outer-name
-        run_name,
         run_date,
-        dea_threshold,
-        fc_switch_threshold
+        run_name='default'
     ):
     """
     Retrieve previous zip recommendations from remediation and expansion directories.
 
     Args:
-        run_name: Name of the run.
         run_date: Date of the run.
-        dea_threshold: DEA threshold.
-        fc_switch_threshold: FC switch threshold.
-        zip_count: Zip count (default: 999999).
+        run_name: Name of the run.
     
     Returns:
         pd.DataFrame: DataFrame containing previous zips to remediate and expand.
     """
-    recommendation_path = os.path.join('./results/execution', run_name)
-    run_date_dt = pd.to_datetime(run_date)
-    start_date_dt = run_date_dt - timedelta(days=30)
+    run_date = pd.to_datetime(run_date)
+    start_date = (run_date - timedelta(days=30)).strftime('%Y-%m-%d')
+    end_date = run_date.strftime('%Y-%m-%d')
 
-    prev_zip_recommendation = pd.DataFrame(
-        columns=['zip5', 'last_recommendation', 'recommendation_date',
-                'last_reason_dea', 'last_reason_shutdown', 'last_reason_backlog']
-    )
-    
+    input_cols = ['zip5', 'final_recommendation', 'run_dttm',
+                'final_reason_dea', 'final_reason_shutdown', 'final_reason_backlog']
     output_cols = ['zip5', 'last_recommendation', 'recommendation_date',
-                   'last_reason_dea', 'last_reason_shutdown', 'last_reason_backlog']
-    input_cols = ['zip5', 'final_recommendation', 'recommendation_date',
-                  'final_reason_dea', 'final_reason_shutdown', 'final_reason_backlog']
+                'last_reason_dea', 'last_reason_shutdown', 'last_reason_backlog']
 
-    # Read previous zips from both remediation and expansion directories
-    for directory in ['zips_to_remediate', 'zips_to_expand']:
-        directory_path = os.path.join(recommendation_path, directory)
+    try:
+        # remediation
+        remediation_df = execute_query_and_return_formatted_data(
+            query_path='./sql',
+            query_name='get_last_remediation',
+            start_date=start_date,
+            end_date=end_date,
+            convert_to_lowercase=True)
 
-        if not os.path.exists(directory_path):
-            continue
+        remediation_df = remediation_df.loc[remediation_df['run_name'] == run_name]
 
-        try:
-            # List all dates in directory
-            date_list = [
-                f for f in os.listdir(directory_path)
-                if os.path.isdir(os.path.join(directory_path, f))
-            ]
+        remediation_df = remediation_df[input_cols]
+        remediation_df.columns = output_cols
 
-            # Filter dates within lookback window
-            prev_dates = [
-                d for d in date_list
-                if (pd.to_datetime(d) < run_date_dt)
-                and (pd.to_datetime(d) >= start_date_dt)
-            ]
+    except Exception as e:
+        logger.error('Error getting last remediation: %s', e)
+        remediation_df = pd.DataFrame(columns=['zip5', 'last_recommendation', 'recommendation_date',
+                    'last_reason_dea', 'last_reason_shutdown', 'last_reason_backlog'])
 
-            if not prev_dates:
-                continue
+    try:
+        # expansion
+        expansion_df = execute_query_and_return_formatted_data(
+            query_path='./sql',
+            query_name='get_last_expansion',
+            start_date=start_date,
+            end_date=end_date,
+            convert_to_lowercase=True)
 
-            # Read all parquet files for valid dates
-            prev_zips = pd.DataFrame()
-            for prev_date in prev_dates:
-                main_path = Path(os.path.join(directory_path, prev_date))
-                file_name = list(main_path.glob(f'dea_th_{dea_threshold}_fc_sw_{fc_switch_threshold}*all.parquet'))
-                file_path = file_name[0]
-                if os.path.exists(file_path):
-                    temp_df = pd.read_parquet(file_path)
-                    temp_df['recommendation_date'] = prev_date
-                    prev_zips = pd.concat([prev_zips, temp_df], ignore_index=True)
+        expansion_df = expansion_df.loc[remediation_df['run_name'] == run_name]
 
-            if prev_zips.empty:
-                continue
+        expansion_df = expansion_df[input_cols]
+        expansion_df.columns = output_cols
 
-            # Get latest recommendation date
-            prev_zips['latest_recommendation_date'] = prev_zips\
-                .groupby('zip5')['recommendation_date']\
-                    .transform('max')
-            prev_zips = prev_zips.loc[
-                prev_zips['recommendation_date'] == prev_zips['latest_recommendation_date']]
+    except Exception as e:
+        logger.error('Error getting last expansion: %s', e)
+        expansion_df = pd.DataFrame(columns=['zip5', 'last_recommendation', 'recommendation_date',
+                    'last_reason_dea', 'last_reason_shutdown', 'last_reason_backlog'])
 
-            # Select and rename columns
-            prev_zips = prev_zips[input_cols]
-            prev_zips.columns = output_cols
 
-            prev_zip_recommendation = pd.concat(
-                [prev_zip_recommendation, prev_zips], ignore_index=True
-            )
+    df = pd.concat([remediation_df, expansion_df])
+    df['last_recommendation_date'] = df.groupby('zip5')['recommendation_date'].transform('max')
+    df = df.loc[df['recommendation_date'] == df['last_recommendation_date']]
+    df = df.drop('last_recommendation_date', axis=1)
+    df['recommendation_date'] = pd.to_datetime(df['recommendation_date']).dt.strftime('%Y-%m-%d')
 
-        except (OSError, ValueError, KeyError) as e:
-            logger.error("Error reading previous recommendations from %s: %s", directory, e)
-
-    return prev_zip_recommendation
+    return df
 
 
 def calculate_zip_volume_daily(baseline_sim_df):  # pylint: disable=redefined-outer-name
@@ -594,17 +576,17 @@ def resolve_current_decision(row):
     Returns:
         pd.Series: Series containing current recommendation and reasons.
     """
-    reason_dea = row.get('reason_code_dea', None)
-    reason_shutdown = row.get('reason_code_shutdown', None)
-    reason_backlog = row.get('reason_code_backlog', None)
+    reason_dea = row.get('reason_code_dea', 'None')
+    reason_shutdown = row.get('reason_code_shutdown', 'None')
+    reason_backlog = row.get('reason_code_backlog', 'None')
 
     # Shutdown ALWAYS takes precedence
     if reason_shutdown in ['activate', 'deactivate']:
         return pd.Series({
             'current_recommendation': reason_shutdown,
-            'current_reason_dea': None,
+            'current_reason_dea': 'None',
             'current_reason_shutdown': reason_shutdown,
-            'current_reason_backlog': None
+            'current_reason_backlog': 'None'
         })
 
     # DEA next (ONLY IF shutdown is not activate/deactivate)
@@ -612,24 +594,24 @@ def resolve_current_decision(row):
         return pd.Series({
             'current_recommendation': reason_dea,
             'current_reason_dea': reason_dea,
-            'current_reason_shutdown': None,
-            'current_reason_backlog': None
+            'current_reason_shutdown': 'None',
+            'current_reason_backlog': 'None'
         })
 
     # Backlog next
     if reason_backlog in ['activate', 'deactivate']:
         return pd.Series({
             'current_recommendation': reason_backlog,
-            'current_reason_dea': None,
-            'current_reason_shutdown': None,
+            'current_reason_dea': 'None',
+            'current_reason_shutdown': 'None',
             'current_reason_backlog': reason_backlog
         })
 
     # Any 'ok' can be propagated (priority: DEA > Shutdown > Backlog)
-    decision = None
-    rdea = None
-    rshutdown = None
-    rbacklog = None
+    decision = 'None'
+    rdea = 'None'
+    rshutdown = 'None'
+    rbacklog = 'None'
 
     if reason_dea == 'ok':
         decision, rdea = 'ok', 'ok'
@@ -667,33 +649,33 @@ def determine_final_decision(row):
     # If status is 0 and last is activate, then make last None
     # If status is 1 and last is deactivate, then make last None
     if status == 0 and last == 'activate':
-        last = None
-        last_dea = None
-        last_shutdown = None
-        last_backlog = None
+        last = 'None'
+        last_dea = 'None'
+        last_shutdown = 'None'
+        last_backlog = 'None'
     elif status == 1 and last == 'deactivate':
-        last = None
-        last_dea = None
-        last_shutdown = None
-        last_backlog = None
+        last = 'None'
+        last_dea = 'None'
+        last_shutdown = 'None'
+        last_backlog = 'None'
 
     # If deactivated due to dea before, keep it deactivated
     if last in ['deactivate'] and last_dea == 'deactivate':
         return pd.Series({
-            'final_recommendation': None,
-            'final_reason_dea': None,
-            'final_reason_shutdown': None,
-            'final_reason_backlog': None
+            'final_recommendation': 'None',
+            'final_reason_dea': 'None',
+            'final_reason_shutdown': 'None',
+            'final_reason_backlog': 'None'
         })
 
     # If last decision was a switchback to usual
     if last in ['activate','deactivate'] \
         and last_dea == 'ok' and last_shutdown == 'ok' and last_backlog == 'ok':
         return pd.Series({
-            'final_recommendation': None,
-            'final_reason_dea': None,
-            'final_reason_shutdown': None,
-            'final_reason_backlog': None
+            'final_recommendation': 'None',
+            'final_reason_dea': 'None',
+            'final_reason_shutdown': 'None',
+            'final_reason_backlog': 'None'
         })
 
     # If current recommendation is activate or deactivate, use it
@@ -723,10 +705,10 @@ def determine_final_decision(row):
     # Otherwise, also use current decision/reasons (safe fallback)
     else:
         return pd.Series({
-            'final_recommendation': None,
-            'final_reason_dea': None,
-            'final_reason_shutdown': None,
-            'final_reason_backlog': None
+            'final_recommendation': 'None',
+            'final_reason_dea': 'None',
+            'final_reason_shutdown': 'None',
+            'final_reason_backlog': 'None'
         })
 
 
@@ -886,6 +868,11 @@ def get_zip_recommendation(  # pylint: disable=redefined-outer-name
     # Merge last recommendation and determine final decision
     zips_to_recommend = zips_to_recommend.merge(
         last_zip_recommendation, on='zip5', how='left')
+    zips_to_recommend['last_recommendation'] = zips_to_recommend['last_recommendation'].fillna('None')
+    zips_to_recommend['last_reason_dea'] = zips_to_recommend['last_reason_dea'].fillna('None')
+    zips_to_recommend['last_reason_shutdown'] = zips_to_recommend['last_reason_shutdown'].fillna('None')
+    zips_to_recommend['last_reason_backlog'] = zips_to_recommend['last_reason_backlog'].fillna('None')
+
     final_recommendation = zips_to_recommend.apply(determine_final_decision, axis=1)
     zips_to_recommend = pd.concat([zips_to_recommend, final_recommendation], axis=1)
 
@@ -973,6 +960,23 @@ def get_zip_recommendation(  # pylint: disable=redefined-outer-name
     return zips_to_recommend_remediate, zips_to_recommend_expand
 
 
+def add_execution_parameters_to_df(df, execution_parameters):
+    """
+    Add execution parameter names and values as JSON arrays to a DataFrame.
+
+    Args:
+        df: DataFrame to add parameters to.
+        execution_parameters: Dictionary containing execution parameters.
+
+    Returns:
+        pd.DataFrame: DataFrame with 'parameter_names' and 'parameter_values' columns added.
+    """
+    df = df.copy()
+    df['parameter_names'] = json.dumps(list(execution_parameters.keys()))
+    df['parameter_values'] = json.dumps(list(execution_parameters.values()))
+    return df
+
+
 def select_zips_and_get_simulation(simulation_df, zip_df, zip_count):  # pylint: disable=redefined-outer-name
     """
     Select top N zip codes by priority score and return corresponding simulation data.
@@ -1022,8 +1026,11 @@ if __name__ == '__main__':
     with open("./configs.yaml", encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
-    RUN_DATE = '2025-11-14' # date.today().strftime('%Y-%m-%d') # date.today().strftime('%Y-%m-%d')
+    RUN_DATE = date.today().strftime('%Y-%m-%d') # '2025-11-15'
+    RUN_DTTM = datetime.today().strftime('%Y-%m-%d %H:%M:%S') # '2025-11-15 00:00:00'
     RUN_NAME = config['EXECUTION']['run_name']
+    SAVE_TO_SNOWFLAKE = config['EXECUTION']['save_to_snowflake']
+    SAVE_TO_LOCAL = config['EXECUTION']['save_to_local']
 
     EXPANSION = config['EXECUTION']['expansion']
     REMEDIATION = config['EXECUTION']['remediation']
@@ -1065,7 +1072,7 @@ if __name__ == '__main__':
     logger.info('Run date is set to: %s', RUN_DATE)
     logger.info('Getting simulation data for: %s - %s ...', START_DATE, END_DATE)
 
-    # load data
+    # LOAD DATA
     # baseline - remediation - expansion simulation - based on sim start andend date
     baseline_sim_df = read_helper(
         os.path.join('./data/simulations', BASELINE_SCENARIO),
@@ -1178,12 +1185,11 @@ if __name__ == '__main__':
 
     # last recommendation if any - based on RUN_DATE
     last_zip_recommendation = get_last_recommendation(
-        RUN_NAME,
         RUN_DATE,
-        DEA_THRESHOLD,
-        FC_SWITCH_THRESHOLD
+        RUN_NAME
     )
     print(last_zip_recommendation.head())
+
     # exclusion list if any
     # exclusion_list = read_helper()
 
@@ -1199,7 +1205,7 @@ if __name__ == '__main__':
         'ONTRGD zip count by active status: \n%s', 
         zip_status_df.groupby('active')['zip5'].count().to_string())
 
-    # Apply decision rules and get candidate zips to remediate / expand for ONTRGD
+    # APPLY DECISION RULES AND GET CANDIDATE ZIPS TO REMDIATE / EXPAND FOR ONTRGD
     # TODO: change to smf_expansion_df
     zips_to_remediate, zips_to_expand = get_zip_recommendation(
         RUN_DATE,
@@ -1238,7 +1244,7 @@ if __name__ == '__main__':
     ]
     filtered_list.append(999999)
 
-    # Select zips and get simulation result based on recommendation zip count
+    # SELECT ZIPS AND GET SIMULATION RESULT BASED ON RECOMMENDATION ZIP COUNT
     for zip_count in filtered_list:
 
         logger.info('scoping zip count: %i', zip_count)
@@ -1247,6 +1253,8 @@ if __name__ == '__main__':
         EXPANSION_ZIP_COUNT = 0
 
         baseline_sim_df_no_change = baseline_sim_df.copy()
+
+        # SELECTING ZIPS AND GETTING SIMULATION RESULT BASED ON RECOMMENDATION ZIP COUNT
 
         if REMEDIATION:
             remediate_sim_df_temp, remediate_zips_temp = select_zips_and_get_simulation(
@@ -1299,7 +1307,7 @@ if __name__ == '__main__':
                 baseline_sim_df_no_change['selected'].isnull()
             ]
             baseline_sim_df_no_change = baseline_sim_df_no_change.drop('selected', axis=1)
-        
+
         # Generate final simulation result with expand / remediate decisions
         final_sim_df = baseline_sim_df_no_change[[
             'order_id',
@@ -1329,11 +1337,7 @@ if __name__ == '__main__':
         if EXPANSION:
             final_sim_df = pd.concat([final_sim_df, expand_sim_df_temp])
 
-        # Calculate and save all metrics
-        if not os.path.exists(OUTPUT_PATH):
-            os.makedirs(OUTPUT_PATH)
-        if not os.path.exists(METRICS_PATH):
-            os.makedirs(METRICS_PATH)
+        # CALCULATE METRICS
 
         # Estimate network level ONTRGD % before WMS proxy
         carrier_change = calculate_package_distribution_change_by_groups(
@@ -1395,75 +1399,189 @@ if __name__ == '__main__':
         )
         logger.info('FC CHARGE CHANGES\n%s', fc_charge_change.to_string())
 
-        SETTING_NAME = \
-            f'dea_th_{DEA_THRESHOLD}_fc_sw_{FC_SWITCH_THRESHOLD}_rem_zip_{REMEDIATION_ZIP_COUNT}_exp_zip_{EXPANSION_ZIP_COUNT}'
 
-        # Save metrics to Excel
-        excel_file_path = os.path.join(METRICS_PATH, SETTING_NAME + '.xlsx')
-        with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
-            carrier_change.to_excel(
-                writer,
-                sheet_name='carrier_net_before_wms_proxy',
-                index=False,
-                na_rep=''
+        # SAVING OUTPUTS
+
+        logger.info('Saving outputs...')
+
+        # ADD PARAMETERS TO OUTPUTS
+
+        execution_parameters = {
+            'REMEDIATION_ZIP_COUNT': REMEDIATION_ZIP_COUNT,
+            'EXPANSION_ZIP_COUNT': EXPANSION_ZIP_COUNT,
+            'DEA_THRESHOLD': DEA_THRESHOLD,
+            'DEA_LOOKBACK_DAY_COUNT': DEA_LOOKBACK_DAY_COUNT,
+            'BACKLOG_THRESHOLD': BACKLOG_THRESHOLD,
+            'CLEAR_DATE_THRESHOLD': CLEAR_DATE_THRESHOLD,
+            'FC_SWITCH_THRESHOLD': FC_SWITCH_THRESHOLD,
+            'LOOKBACK_DAY_COUNT': LOOKBACK_DAY_COUNT
+        }
+
+        carrier_change = add_execution_parameters_to_df(
+            carrier_change, execution_parameters)
+        carrier_change_proxy = add_execution_parameters_to_df(
+            carrier_change_proxy, execution_parameters)
+        cost_saving = add_execution_parameters_to_df(
+            cost_saving, execution_parameters)
+        fc_charge_change = add_execution_parameters_to_df(
+            fc_charge_change, execution_parameters)
+        final_sim_df = add_execution_parameters_to_df(
+            final_sim_df, execution_parameters)
+
+        carrier_change['run_dttm'] = RUN_DTTM
+        carrier_change_proxy['run_dttm'] = RUN_DTTM
+        cost_saving['run_dttm'] = RUN_DTTM
+        fc_charge_change['run_dttm'] = RUN_DTTM
+        final_sim_df['run_dttm'] = RUN_DTTM
+
+        carrier_change['run_name'] = RUN_NAME
+        carrier_change_proxy['run_name'] = RUN_NAME
+        cost_saving['run_name'] = RUN_NAME
+        fc_charge_change['run_name'] = RUN_NAME
+        final_sim_df['run_name'] = RUN_NAME
+
+        # SAVE METRICS TO SNOWFLAKE
+
+        if SAVE_TO_SNOWFLAKE:
+
+            success, nchunks, nrows, _ = insert_data_to_snowflake(
+                df=carrier_change,
+                table_name='ZIPCAR_CARRIER_CHANGE_BEFORE_WMS_PROXY',
+                database='EDLDB',
+                schema='SC_PROMISE_SANDBOX')
+            success, nchunks, nrows, _ = insert_data_to_snowflake(
+                df=carrier_change_proxy,
+                table_name='ZIPCAR_CARRIER_CHANGE_AFTER_WMS_PROXY',
+                database='EDLDB',
+                schema='SC_PROMISE_SANDBOX')
+            success, nchunks, nrows, _ = insert_data_to_snowflake(
+                df=cost_saving,
+                table_name='ZIPCAR_COST_SAVING',
+                database='EDLDB',
+                schema='SC_PROMISE_SANDBOX')
+            success, nchunks, nrows, _ = insert_data_to_snowflake(
+                df=fc_charge_change,
+                table_name='ZIPCAR_FC_CHARGE_CHANGES',
+                database='EDLDB',
+                schema='SC_PROMISE_SANDBOX')
+            success, nchunks, nrows, _ = insert_data_to_snowflake(
+                df=final_sim_df,
+                table_name='ZIPCAR_ITERATION_SIMULATION',
+                database='EDLDB',
+                schema='SC_PROMISE_SANDBOX')
+
+            if REMEDIATION:
+                remediate_zips_temp = add_execution_parameters_to_df(
+                    remediate_zips_temp, execution_parameters)
+                remediate_zips_temp['run_dttm'] = RUN_DTTM
+                remediate_zips_temp['run_name'] = RUN_NAME
+                remediate_zips_temp['zip_count'] = REMEDIATION_ZIP_COUNT
+                if zip_count == 999999:
+                    remediate_zips_temp['zip_count_tag'] = 'all'
+                else:
+                    remediate_zips_temp['zip_count_tag'] = 'partial'
+                success, nchunks, nrows, _ = insert_data_to_snowflake(
+                    df=remediate_zips_temp,
+                    table_name='ZIPCAR_REMEDIATION_ZIPS',
+                    database='EDLDB',
+                    schema='SC_PROMISE_SANDBOX')
+
+            if EXPANSION:
+                expand_zips_temp = add_execution_parameters_to_df(
+                    expand_zips_temp, execution_parameters)
+                expand_zips_temp['run_dttm'] = RUN_DTTM
+                expand_zips_temp['run_name'] = RUN_NAME
+                expand_zips_temp['zip_count'] = EXPANSION_ZIP_COUNT
+                if zip_count == 999999:
+                    expand_zips_temp['zip_count_tag'] = 'all'
+                else:
+                    expand_zips_temp['zip_count_tag'] = 'partial'
+                success, nchunks, nrows, _ = insert_data_to_snowflake(
+                    df=expand_zips_temp,
+                    table_name='ZIPCAR_EXPANSION_ZIPS',
+                    database='EDLDB',
+                    schema='SC_PROMISE_SANDBOX')
+
+        # SAVE METRICS TO LOCAL EXCEL FILES
+
+        if SAVE_TO_LOCAL:
+
+            if not os.path.exists(OUTPUT_PATH):
+                os.makedirs(OUTPUT_PATH)
+            if not os.path.exists(METRICS_PATH):
+                os.makedirs(METRICS_PATH)
+
+            excel_file_path = os.path.join(METRICS_PATH, 'metrics.xlsx')
+            with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
+                carrier_change.to_excel(
+                    writer,
+                    sheet_name='carrier_net_before_wms_proxy',
+                    index=False,
+                    na_rep=''
+                )
+                carrier_change_proxy.to_excel(
+                    writer,
+                    sheet_name='carrier_net_after_wms_proxy',
+                    index=False,
+                    na_rep=''
+                )
+                cost_saving.to_excel(
+                    writer,
+                    sheet_name='cost_saving',
+                    index=False,
+                    na_rep=''
+                )
+                fc_charge_change.to_excel(
+                    writer,
+                    sheet_name='fc_charge_changes',
+                    index=False,
+                    na_rep=''
+                )
+
+            # Save final simulation
+            if not os.path.exists(SIM_PATH):
+                os.makedirs(SIM_PATH)
+            final_sim_df.to_parquet(
+                os.path.join(
+                    SIM_PATH,
+                    f'simulation_output_rem_{REMEDIATION_ZIP_COUNT}_exp_{EXPANSION_ZIP_COUNT}.parquet')
             )
-            carrier_change_proxy.to_excel(
-                writer,
-                sheet_name='carrier_net_after_wms_proxy',
-                index=False,
-                na_rep=''
-            )
-            cost_saving.to_excel(
-                writer,
-                sheet_name='cost_saving',
-                index=False,
-                na_rep=''
-            )
-            fc_charge_change.to_excel(
-                writer,
-                sheet_name='fc_charge_changes',
-                index=False,
-                na_rep=''
-            )
 
-        # Save final simulation
-        if not os.path.exists(SIM_PATH):
-            os.makedirs(SIM_PATH)
-        final_sim_df.to_parquet(
-            os.path.join(SIM_PATH, f'{SETTING_NAME}.parquet')
-        )
+            ALL_ZIP_TAG = ''
+            if zip_count == 999999:
+                ALL_ZIP_TAG = '_all'
 
-        ALL_ZIP_TAG = ''
-        if zip_count == 999999:
-            ALL_ZIP_TAG = '_all'
+            # Save zip recommendations
+            if EXPANSION:
+                if not os.path.exists(EXPANSION_PATH):
+                    os.makedirs(EXPANSION_PATH)
 
-        # Save zip recommendations
-        if EXPANSION:
-            if not os.path.exists(EXPANSION_PATH):
-                os.makedirs(EXPANSION_PATH)
+                expand_zips_temp = add_execution_parameters_to_df(
+                    expand_zips_temp, execution_parameters)
+                expand_zips_temp['run_date'] = RUN_DATE
+                expand_zips_temp['run_name'] = RUN_NAME
 
-            SETTING_NAME = \
-            f'dea_th_{DEA_THRESHOLD}_fc_sw_{FC_SWITCH_THRESHOLD}_exp_zip_{EXPANSION_ZIP_COUNT}{ALL_ZIP_TAG}'
+                expand_zips_temp.to_parquet(
+                    os.path.join(EXPANSION_PATH, f'exp_{EXPANSION_ZIP_COUNT}{ALL_ZIP_TAG}.parquet')
+                )
+                expand_zips_temp.to_csv(
+                    os.path.join(EXPANSION_PATH, f'exp_{EXPANSION_ZIP_COUNT}{ALL_ZIP_TAG}.csv'),
+                    index=False
+                )
 
-            expand_zips_temp.to_parquet(
-                os.path.join(EXPANSION_PATH, f'{SETTING_NAME}.parquet')
-            )
-            expand_zips_temp.to_csv(
-                os.path.join(EXPANSION_PATH, f'{SETTING_NAME}.csv'),
-                index=False
-            )
+            if REMEDIATION:
+                if not os.path.exists(REMEDIATION_PATH):
+                    os.makedirs(REMEDIATION_PATH)
 
-        if REMEDIATION:
-            if not os.path.exists(REMEDIATION_PATH):
-                os.makedirs(REMEDIATION_PATH)
+                remediate_zips_temp = add_execution_parameters_to_df(
+                    remediate_zips_temp, execution_parameters)
+                remediate_zips_temp['run_date'] = RUN_DATE
+                remediate_zips_temp['run_name'] = RUN_NAME
 
-            SETTING_NAME = \
-            f'dea_th_{DEA_THRESHOLD}_fc_sw_{FC_SWITCH_THRESHOLD}_rem_zip_{REMEDIATION_ZIP_COUNT}{ALL_ZIP_TAG}'
-
-            remediate_zips_temp.to_parquet(
-                os.path.join(REMEDIATION_PATH, f'{SETTING_NAME}.parquet')
-            )
-            remediate_zips_temp.to_csv(
-                os.path.join(REMEDIATION_PATH, f'{SETTING_NAME}.csv'),
-                index=False
-            )
+                remediate_zips_temp.to_parquet(
+                    os.path.join(REMEDIATION_PATH, f'rem_{REMEDIATION_ZIP_COUNT}{ALL_ZIP_TAG}.parquet')
+                )
+                remediate_zips_temp.to_csv(
+                    os.path.join(REMEDIATION_PATH, f'rem_{REMEDIATION_ZIP_COUNT}{ALL_ZIP_TAG}.csv'),
+                    index=False
+                )

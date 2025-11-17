@@ -13,6 +13,8 @@ EXECUTION_DATA: # pulling unpadded dea / shutdown / backlog daily
 
 EXECUTION:
   run_name: 'default'
+  save_to_snowflake: False
+  save_to_local: True
 
   expansion: False
   remediation: True

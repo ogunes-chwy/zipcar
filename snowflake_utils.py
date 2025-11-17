@@ -4,11 +4,12 @@ import numpy as np
 from typing import Optional
 from snowflake.connector import connect
 import sqlparse
+from snowflake.connector.pandas_tools import write_pandas
 
 # Snowflake connection settings
 connection_settings = {
     'user': 'ogunes@chewy.com',
-    'password': '5376991886.Melda',
+    'password': '',
     'authenticator': 'https://chewy.okta.com',
     'account': 'chewy.us-east-1',
     'database': 'EDLDB',
@@ -197,3 +198,56 @@ def execute_multiple_query_and_return_formatted_data(
                 df[date_col] = pd.to_datetime(df[date_col])
 
     return df
+
+def insert_data_to_snowflake(
+    df: pd.DataFrame,
+    table_name: str,
+    database: Optional[str] = None,
+    schema: Optional[str] = None,
+    overwrite: bool = False,
+    auto_create_table: bool = True
+):
+    """
+    Inserts data into a Snowflake table.
+
+    Args:
+        df (pd.DataFrame): The DataFrame to insert.
+        table_name (str): The name of the Snowflake table.
+        database (str, optional): The database name. If None, uses connection default.
+        schema (str, optional): The schema name. If None, uses connection default.
+        overwrite (bool): Whether to overwrite existing table. Defaults to False.
+        auto_create_table (bool): Whether to auto-create table if it doesn't exist. Defaults to True.
+
+    Returns:
+        tuple: (success, nchunks, nrows, output) from write_pandas
+    """
+    # Convert column names to uppercase for Snowflake compatibility
+    df_copy = df.copy()
+    df_copy.columns = [col.upper() for col in df_copy.columns]
+
+    connection = connect(**connection_settings)
+
+    try:
+        # Build write_pandas arguments
+        write_kwargs = {
+            'conn': connection,
+            'df': df_copy,
+            'table_name': table_name.upper(),
+            'overwrite': overwrite,
+            'auto_create_table': auto_create_table
+        }
+        
+        # Only add database/schema if explicitly provided
+        if database:
+            write_kwargs['database'] = database.upper()
+        if schema:
+            write_kwargs['schema'] = schema.upper()
+        
+        success, nchunks, nrows, output = write_pandas(**write_kwargs)
+        
+        # Commit the transaction
+        connection.commit()
+        
+        return success, nchunks, nrows, output
+    finally:
+        connection.close()
