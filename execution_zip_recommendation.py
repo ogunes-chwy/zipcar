@@ -1188,7 +1188,7 @@ if __name__ == '__main__':
         RUN_DATE,
         RUN_NAME
     )
-    print(last_zip_recommendation.head())
+    # print(last_zip_recommendation.head())
 
     # exclusion list if any
     # exclusion_list = read_helper()
