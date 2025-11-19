@@ -8,7 +8,9 @@ import yaml
 from sklearn.preprocessing import MinMaxScaler
 from snowflake_utils import insert_data_to_snowflake,execute_query_and_return_formatted_data
 
-from metric_helper import (
+import helper_functions as hf
+
+from helper_functions import (
     read_helper,
     calculate_package_distribution_change_by_groups,
     apply_wms_proxy,
@@ -742,6 +744,7 @@ def calculate_priority_score(df):
 
 
 def get_zip_recommendation(  # pylint: disable=redefined-outer-name
+        PREFIX,
         RUN_DATE,
         RUN_NAME,
         zip_status_df,
@@ -893,10 +896,10 @@ def get_zip_recommendation(  # pylint: disable=redefined-outer-name
 
     ## STEP 5: Save intermediate results for debugging purposes
 
-    if not os.path.exists(f'./results/execution/{RUN_NAME}/metadata/{RUN_DATE}'):
-        os.makedirs(f'./results/execution/{RUN_NAME}/metadata/{RUN_DATE}')
+    if not hf.path_exists(f'{PREFIX}/results/execution/{RUN_NAME}/metadata/{RUN_DATE}'):
+        hf.ensure_directory_exists(f'{PREFIX}/results/execution/{RUN_NAME}/metadata/{RUN_DATE}')
     zips_to_recommend.to_parquet(
-        f'./results/execution/{RUN_NAME}/metadata/{RUN_DATE}/zips_to_recommend.parquet')
+        f'{PREFIX}/results/execution/{RUN_NAME}/metadata/{RUN_DATE}/zips_to_recommend.parquet')
 
     ## STEP 6: Split into remediation and expansion groups
 
@@ -1026,6 +1029,7 @@ if __name__ == '__main__':
     with open("./configs.yaml", encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
+    PREFIX = config['ENVIRONMENT']['prefix']
     RUN_DATE = date.today().strftime('%Y-%m-%d') # '2025-11-15'
     RUN_DTTM = datetime.today().strftime('%Y-%m-%d %H:%M:%S') # '2025-11-15 00:00:00'
     RUN_NAME = config['EXECUTION']['run_name']
@@ -1054,7 +1058,7 @@ if __name__ == '__main__':
     CLEAR_DATE_THRESHOLD = config['EXECUTION']['clear_date_threshold']
 
     # set output paths
-    OUTPUT_PATH = os.path.join('./results/execution', RUN_NAME)
+    OUTPUT_PATH = os.path.join(f'{PREFIX}/results/execution', RUN_NAME)
     METRICS_PATH = os.path.join(OUTPUT_PATH, 'metrics', RUN_DATE)
     SIM_PATH = os.path.join(OUTPUT_PATH, 'simulation_output', RUN_DATE)
     REMEDIATION_PATH = os.path.join(OUTPUT_PATH, 'zips_to_remediate', RUN_DATE)
@@ -1075,7 +1079,7 @@ if __name__ == '__main__':
     # LOAD DATA
     # baseline - remediation - expansion simulation - based on sim start andend date
     baseline_sim_df = read_helper(
-        os.path.join('./data/simulations', BASELINE_SCENARIO),
+        os.path.join(f'{PREFIX}/data/simulations', BASELINE_SCENARIO),
         cols=[
             'order_id',
             'order_placed_date',
@@ -1114,7 +1118,7 @@ if __name__ == '__main__':
             'dea_flag']
     )
     remediate_sim_df = read_helper(
-        os.path.join('./data/simulations', REMEDIATION_SCENARIO),
+        os.path.join(f'{PREFIX}/data/simulations', REMEDIATION_SCENARIO),
         cols=[
             'order_id',
             'order_placed_date',
@@ -1129,7 +1133,7 @@ if __name__ == '__main__':
         end_date=END_DATE
     )
     expand_sim_df = read_helper(
-        os.path.join('./data/simulations', EXPANSION_SCENARIO),
+        os.path.join(f'{PREFIX}/data/simulations', EXPANSION_SCENARIO),
         cols=[
             'order_id',
             'order_placed_date',
@@ -1146,7 +1150,7 @@ if __name__ == '__main__':
 
     # dea / backlog / shutdown - based on RUN_DATE
     dea_df = read_helper(
-        './data/execution_data/unpadded_dea',
+        f'{PREFIX}/data/execution_data/unpadded_dea',
         start_date=(
             pd.to_datetime(RUN_DATE) - timedelta(days=DEA_LOOKBACK_DAY_COUNT+1))\
                 .strftime('%Y-%m-%d'),
@@ -1163,7 +1167,7 @@ if __name__ == '__main__':
               ]
     )
     backlog_df = read_helper(
-        './data/execution_data/backlog',
+        f'{PREFIX}/data/execution_data/backlog',
         start_date=(pd.to_datetime(RUN_DATE) - timedelta(days=3)).strftime('%Y-%m-%d'),
         end_date=RUN_DATE,
         date_col_name='date'
@@ -1171,13 +1175,13 @@ if __name__ == '__main__':
 
     # smf baseline - expansion - based on sim start and end date
     smf_baseline_df = read_helper(
-        os.path.join('./data/smf', BASELINE_SCENARIO),
+        os.path.join(f'{PREFIX}/data/smf', BASELINE_SCENARIO),
         start_date=START_DATE,
         end_date=END_DATE,
         date_col_name='shipdate'
     )
     smf_expansion_df = read_helper(
-        os.path.join('./data/smf', EXPANSION_SCENARIO),
+        os.path.join(f'{PREFIX}/data/smf', EXPANSION_SCENARIO),
         start_date=START_DATE,
         end_date=END_DATE,
         date_col_name='shipdate'
@@ -1208,6 +1212,7 @@ if __name__ == '__main__':
     # APPLY DECISION RULES AND GET CANDIDATE ZIPS TO REMDIATE / EXPAND FOR ONTRGD
     # TODO: change to smf_expansion_df
     zips_to_remediate, zips_to_expand = get_zip_recommendation(
+        PREFIX,
         RUN_DATE,
         RUN_NAME,
         zip_status_df,
@@ -1506,10 +1511,10 @@ if __name__ == '__main__':
 
         if SAVE_TO_LOCAL:
 
-            if not os.path.exists(OUTPUT_PATH):
-                os.makedirs(OUTPUT_PATH)
-            if not os.path.exists(METRICS_PATH):
-                os.makedirs(METRICS_PATH)
+            if not hf.path_exists(OUTPUT_PATH):
+                hf.ensure_directory_exists(OUTPUT_PATH)
+            if not hf.path_exists(METRICS_PATH):
+                hf.ensure_directory_exists(METRICS_PATH)
 
             excel_file_path = os.path.join(METRICS_PATH, 'metrics.xlsx')
             with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
@@ -1539,8 +1544,8 @@ if __name__ == '__main__':
                 )
 
             # Save final simulation
-            if not os.path.exists(SIM_PATH):
-                os.makedirs(SIM_PATH)
+            if not hf.path_exists(SIM_PATH):
+                hf.ensure_directory_exists(SIM_PATH)
             final_sim_df.to_parquet(
                 os.path.join(
                     SIM_PATH,
@@ -1553,8 +1558,8 @@ if __name__ == '__main__':
 
             # Save zip recommendations
             if EXPANSION:
-                if not os.path.exists(EXPANSION_PATH):
-                    os.makedirs(EXPANSION_PATH)
+                if not hf.path_exists(EXPANSION_PATH):
+                    hf.ensure_directory_exists(EXPANSION_PATH)
 
                 expand_zips_temp = add_execution_parameters_to_df(
                     expand_zips_temp, execution_parameters)
@@ -1570,8 +1575,8 @@ if __name__ == '__main__':
                 )
 
             if REMEDIATION:
-                if not os.path.exists(REMEDIATION_PATH):
-                    os.makedirs(REMEDIATION_PATH)
+                if not hf.path_exists(REMEDIATION_PATH):
+                    hf.ensure_directory_exists(REMEDIATION_PATH)
 
                 remediate_zips_temp = add_execution_parameters_to_df(
                     remediate_zips_temp, execution_parameters)

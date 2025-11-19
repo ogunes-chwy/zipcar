@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import yaml
 
 from snowflake_utils import execute_query_and_return_formatted_data
-
+import helper_functions as hf
 
 # Get a logger instance
 logging.basicConfig(
@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 def get_unpadded_dea(
+        prefix,
+        query_path,
         output_path,
         s,
         e
@@ -31,11 +33,14 @@ def get_unpadded_dea(
     """
     logger.info('pulling unpadded DEA...')
 
-    if not os.path.exists(output_path):
-        os.makedirs(output_path)
+    if not hf.path_exists(output_path):
+        hf.ensure_directory_exists(output_path)
+
+    if prefix.startswith('s3://'):
+        query_path = '.'
 
     df = execute_query_and_return_formatted_data(
-        query_path='./sql',
+        query_path=query_path,
         query_name='unpadded_edd_dea',
         start_date=s,
         end_date=e,
@@ -51,6 +56,8 @@ def get_unpadded_dea(
 
 
 def get_backlog(
+        prefix,
+        query_path,
         output_path,
         s,
         e
@@ -65,11 +72,14 @@ def get_backlog(
     """
     logger.info('pulling backlog...')
 
-    if not os.path.exists(output_path):
-        os.makedirs(output_path)
+    if not hf.path_exists(output_path):
+        hf.ensure_directory_exists(output_path)
+
+    if prefix.startswith('s3://'):
+        query_path = '.'
 
     df = execute_query_and_return_formatted_data(
-        query_path='./sql',
+        query_path=query_path,
         query_name='backlog',
         start_date=s,
         end_date=e,
@@ -89,6 +99,7 @@ if __name__ == '__main__':
     with open("./configs.yaml", encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
+    PREFIX = config['ENVIRONMENT']['prefix']
     LOOKBACK_DAY_COUNT = config['EXECUTION_DATA']['lookback_day_count']
     START_DATE = config['EXECUTION_DATA']['start_date']
     END_DATE = config['EXECUTION_DATA']['end_date']
@@ -104,13 +115,17 @@ if __name__ == '__main__':
     logger.info('Running for %s - %s ...', START_DATE, END_DATE)
 
     get_unpadded_dea(
-        './data/execution_data/unpadded_dea',
+        prefix=PREFIX,
+        query_path='./sql',
+        output_path=f'{PREFIX}/data/execution_data/unpadded_dea',
         s=START_DATE,
         e=END_DATE
         )
 
     get_backlog(
-        './data/execution_data/backlog',
+        prefix=PREFIX,
+        query_path='./sql',
+        output_path=f'{PREFIX}/data/execution_data/backlog',
         s=START_DATE,
         e=END_DATE
         )
