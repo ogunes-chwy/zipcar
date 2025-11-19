@@ -1,3 +1,6 @@
+ENVIRONMENT:
+  prefix: '.' # '.' 's3://zipcar-dev'
+
 SIMULATION: # pulling baseline - prd / all expand / all remediate simulation scenarios daily + actuals
   simulation_scenario: ['baseline', 'remediation'] # 'baseline', 'remediation', 'expansion'
   lookback_day_count: 7 # if start date and end date is given, then lookback_day_count is overwritten

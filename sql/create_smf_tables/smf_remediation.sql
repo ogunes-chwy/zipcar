@@ -16,7 +16,7 @@ with base as (
         ,generate_date
         ,max(generate_date) over (partition by ship_date, fc, zip5, mode) as max_generate_date
     from 
-        BT_SC_TRANSPORTATION.SHIPMAP
+        EDLDB.BT_SC_TRANSPORTATION.SHIPMAP
     where
         fc in ('AVP1','AVP2','MDT1','BNA1',
                 'CLT1','MCO1','MCI1','DAY1',

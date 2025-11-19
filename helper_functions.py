@@ -4,6 +4,8 @@ from snowflake_utils import execute_query_and_return_formatted_data
 import os
 import logging
 
+import s3fs
+s3 = s3fs.S3FileSystem()
 
 # Get a logger instance
 logging.basicConfig(
@@ -12,6 +14,49 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S' # Define the timestamp format
 )
 logger = logging.getLogger(__name__)
+
+
+def is_s3_path(path):
+    """Check if path is an S3 path."""
+    return path.startswith('s3://') if path else False
+
+
+def is_aws_glue():
+    """Check if running in AWS Glue environment."""
+    return os.environ.get('AWS_EXECUTION_ENV', '').startswith('AWSGlue')
+
+
+def path_exists(path):
+    """
+    Check if path exists (works for both local and S3).
+    
+    Args:
+        path: File or directory path (local or S3)
+    
+    Returns:
+        bool: True if path exists, False otherwise
+    """
+    if is_s3_path(path) or is_aws_glue():
+        return s3.exists(path)
+    else:
+        return os.path.exists(path)
+
+
+def ensure_directory_exists(path):
+    """
+    Create directory if it doesn't exist (works for both local and S3).
+    
+    Args:
+        path: Directory path (local or S3)
+    """
+    if is_s3_path(path) or is_aws_glue():
+        # For S3, directories are created implicitly when files are written
+        # But we can ensure the path exists by touching an empty file or using mkdir
+        if not s3.exists(path):
+            s3.mkdir(path, create_parents=True)
+    else:
+        # For local filesystem
+        os.makedirs(path, exist_ok=True)
 
 
 # read helper
@@ -43,7 +88,7 @@ def read_helper(
         dt = dt.strftime("%Y-%m-%d")
         path_temp = os.path.join(path, f'{date_col_name}={dt}')
 
-        if os.path.exists(path_temp):
+        if path_exists(path_temp):
 
             df_temp = pd.read_parquet(path_temp)
             df_temp[date_col_name] = dt
@@ -209,51 +254,4 @@ def apply_wms_proxy(
     df_agg.columns = ['order_placed_date','fc','carrier','package_count']
 
     return df_agg
-
-
-# execution metrics - unpadded dea
-def calculate_execution_metrics():
-    return 0
-
-
-if __name__ == '__main__':
-
-    df_b = read_helper(
-        os.path.join('./data/simulations', 'baseline'),
-        cols=[
-            'order_id',
-            'order_placed_date',
-            'shipment_tracking_number',
-            'units',
-            'zip5',
-            'sim_fc_name',
-            'sim_carrier_code',
-            'sim_route',
-            'sim_tnt',
-            'sim_transit_cost',
-            'act_fc_name',
-            'act_carrier_code',
-            'act_route',
-            'act_transit_cost',
-            'std',
-            'dea_flag'],
-        start_date='2025-10-05',
-        end_date='2025-10-11'
-    )
-
-    o1 = calculate_package_distribution_by_groups(df_b,
-                                                ['sim_carrier_code'],
-                                                'shipment_tracking_number',
-                                                'nunique'
-                                                )
-
-    df_b = apply_wms_proxy(df_b,'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1030;')
-
-    o2 = calculate_package_distribution_by_groups(df_b,
-                                                ['sim_carrier_code'],
-                                                'shipment_tracking_number',
-                                                'nunique'
-                                                )
-
-    print(o1,o2)
 

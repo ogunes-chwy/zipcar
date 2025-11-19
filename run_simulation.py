@@ -6,6 +6,7 @@ import pandas as pd
 import yaml
 
 from snowflake_utils import execute_multiple_query_and_return_formatted_data
+import helper_functions as hf
 
 
 # Get a logger instance
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 def generate_ship_map_file(
+        prefix,
+        query_path,
         output_path,
         scenario,
         s,
@@ -35,27 +38,32 @@ def generate_ship_map_file(
 
     logger.info('creating SMF table...')
 
-    if not os.path.exists(output_path + f'/{scenario}'):
-        os.makedirs(output_path + f'/{scenario}')
+    if not hf.path_exists(output_path + f'/{scenario}'):
+        hf.ensure_directory_exists(output_path + f'/{scenario}')
+
+    if prefix.startswith('s3://'):
+        query_path = '.'
+    else:
+        query_path = f'{query_path}/create_smf_tables'
 
     # read SMF table creation SQL
     if scenario == 'baseline':
         with open(
-            "sql/create_smf_tables/smf_baseline.sql", 
+            f"{query_path}/smf_baseline.sql", 
             encoding='utf-8'
             ) as f:
             sql_text = f.read()
 
     elif scenario == 'remediation':
         with open(
-            "sql/create_smf_tables/smf_remediation.sql", 
+            f"{query_path}/smf_remediation.sql", 
             encoding='utf-8'
             ) as f:
             sql_text = f.read()
 
     elif scenario == 'expansion':
         with open(
-            "sql/create_smf_tables/smf_expansion.sql", 
+            f"{query_path}/smf_expansion.sql", 
             encoding='utf-8'
             ) as f:
             sql_text = f.read()
@@ -82,6 +90,8 @@ def generate_ship_map_file(
 
 
 def simulation(
+        prefix,
+        query_path,
         output_path,
         scenario,
         s,
@@ -99,27 +109,33 @@ def simulation(
 
     logger.info('running simulation...')
 
-    if not os.path.exists(output_path + f'/{scenario}'):
-        os.makedirs(output_path + f'/{scenario}')
+    if not hf.path_exists(output_path + f'/{scenario}'):
+        hf.ensure_directory_exists(output_path + f'/{scenario}')
+
+    if prefix.startswith('s3://'):
+        query_path = '.'
+        query_path_smf = '.'
+    else:
+        query_path_smf = f'{query_path}/create_smf_tables'
 
     # read SMF table creation SQL
     if scenario == 'baseline':
         with open(
-            "sql/create_smf_tables/smf_baseline.sql", 
+            f"{query_path_smf}/smf_baseline.sql", 
             encoding='utf-8'
             ) as f:
             sql_text_smf = f.read()
 
     elif scenario == 'remediation':
         with open(
-            "sql/create_smf_tables/smf_remediation.sql", 
+            f"{query_path_smf}/smf_remediation.sql", 
             encoding='utf-8'
             ) as f:
             sql_text_smf = f.read()
 
     elif scenario == 'expansion':
         with open(
-            "sql/create_smf_tables/smf_expansion.sql", 
+            f"{query_path_smf}/smf_expansion.sql", 
             encoding='utf-8'
             ) as f:
             sql_text_smf = f.read()
@@ -128,7 +144,7 @@ def simulation(
         raise ValueError(f"Invalid scenario: {scenario}")
 
     # read simulation SQL
-    with open("sql/run_simulation.sql", encoding='utf-8') as f:
+    with open(f"{query_path}/run_simulation.sql", encoding='utf-8') as f:
         sql_text_sim = f.read()
 
     # combine SMF table creation and simulation SQL
@@ -156,6 +172,7 @@ if __name__ == '__main__':
     with open("./configs.yaml", encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
+    PREFIX = config['ENVIRONMENT']['prefix']
     SIMULATION_SCENARIO = config['SIMULATION']['simulation_scenario']
     LOOKBACK_DAY_COUNT = config['SIMULATION']['lookback_day_count']
     START_DATE = config['SIMULATION']['start_date']
@@ -178,14 +195,18 @@ if __name__ == '__main__':
 
 
         generate_ship_map_file(
-            output_path='./data/smf/',
+            prefix=PREFIX,
+            query_path='./sql',
+            output_path=f'{PREFIX}/data/smf/',
             scenario=scenario,
             s=START_DATE,
             e=END_DATE
             )
 
         simulation(
-            output_path='./data/simulations/',
+            prefix=PREFIX,
+            query_path='./sql',
+            output_path=f'{PREFIX}/data/simulations/',
             scenario=scenario,
             s=START_DATE,
             e=END_DATE

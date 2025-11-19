@@ -7,6 +7,7 @@ import sqlparse
 from snowflake.connector.pandas_tools import write_pandas
 
 # Snowflake connection settings
+
 connection_settings = {
     'user': 'ogunes@chewy.com',
     'password': '',
@@ -18,6 +19,18 @@ connection_settings = {
     'role': 'SC_PROMISE_DEVELOPER_MARGIN',
     'session_parameters': {'session_timeout': '12000', },
 }
+
+"""
+connection_settings = {
+    "url" : "https://chewy.us-east-1.snowflakecomputing.com",
+    "account" : "chewy.us-east-1",
+    "user" : "SVC_SC_PROMISE_SANDBOX_DEV",
+    "database" : "edldb_dev",
+    "warehouse" : "SC_PROMISE_WH",
+    "password": "",
+    "client_session_keep_alive": True
+}
+"""
 
 def columns_to_lower(df: pd.DataFrame) -> pd.DataFrame:
     """
