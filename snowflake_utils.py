@@ -5,32 +5,43 @@ from typing import Optional
 from snowflake.connector import connect
 import sqlparse
 from snowflake.connector.pandas_tools import write_pandas
+import boto3
+from botocore.exceptions import ClientError
+import json
 
-# Snowflake connection settings
+
+def get_secret():
+    """
+    Get the Snowflake connection secret from the Secrets Manager.
+    """
+    # Create a Secrets Manager client
+    session = boto3.session.Session()
+    client = session.client(
+        service_name='secretsmanager',
+        region_name='us-east-1'
+    )
+
+    try:
+        get_secret_value_response = client.get_secret_value(
+            SecretId="zipcar-dev-snowflake-connection-ogunes"
+        )
+    except ClientError as e:
+        raise e
+    secret = json.loads(get_secret_value_response['SecretString'])
+    return secret
 
 connection_settings = {
-    'user': 'ogunes@chewy.com',
-    'password': '',
-    'authenticator': 'https://chewy.okta.com',
-    'account': 'chewy.us-east-1',
-    'database': 'EDLDB',
-    'schema': 'public',
-    'warehouse': 'SC_PROMISE_WH',
-    'role': 'SC_PROMISE_DEVELOPER_MARGIN',
-    'session_parameters': {'session_timeout': '12000', },
+'user': get_secret()["user"],
+'password': get_secret()["password"],
+'authenticator': 'https://chewy.okta.com',
+'account': 'chewy.us-east-1',
+'database': 'EDLDB',
+'schema': 'public',
+'warehouse': 'SC_PROMISE_WH',
+'role': 'SC_PROMISE_DEVELOPER_MARGIN',
+'session_parameters': {'session_timeout': '12000', },
 }
 
-"""
-connection_settings = {
-    "url" : "https://chewy.us-east-1.snowflakecomputing.com",
-    "account" : "chewy.us-east-1",
-    "user" : "SVC_SC_PROMISE_SANDBOX_DEV",
-    "database" : "edldb_dev",
-    "warehouse" : "SC_PROMISE_WH",
-    "password": "",
-    "client_session_keep_alive": True
-}
-"""
 
 def columns_to_lower(df: pd.DataFrame) -> pd.DataFrame:
     """
