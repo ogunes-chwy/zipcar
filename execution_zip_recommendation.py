@@ -879,7 +879,14 @@ def get_zip_recommendation(  # pylint: disable=redefined-outer-name
     final_recommendation = zips_to_recommend.apply(determine_final_decision, axis=1)
     zips_to_recommend = pd.concat([zips_to_recommend, final_recommendation], axis=1)
 
-    ## STEP 4: Apply additional constraints
+    ## STEP 4: Save intermediate results for debugging purposes
+
+    if not hf.path_exists(f'{PREFIX}/results/execution/{RUN_NAME}/metadata/{RUN_DATE}'):
+        hf.ensure_directory_exists(f'{PREFIX}/results/execution/{RUN_NAME}/metadata/{RUN_DATE}')
+    zips_to_recommend.to_parquet(
+        f'{PREFIX}/results/execution/{RUN_NAME}/metadata/{RUN_DATE}/zips_to_recommend.parquet')
+
+    ## STEP 5: Apply additional constraints
 
     if zip_volume_floor:
         zips_to_recommend = zips_to_recommend.loc[
@@ -893,13 +900,6 @@ def get_zip_recommendation(  # pylint: disable=redefined-outer-name
 
     # apply exclusion list
     # (Currently not implemented)
-
-    ## STEP 5: Save intermediate results for debugging purposes
-
-    if not hf.path_exists(f'{PREFIX}/results/execution/{RUN_NAME}/metadata/{RUN_DATE}'):
-        hf.ensure_directory_exists(f'{PREFIX}/results/execution/{RUN_NAME}/metadata/{RUN_DATE}')
-    zips_to_recommend.to_parquet(
-        f'{PREFIX}/results/execution/{RUN_NAME}/metadata/{RUN_DATE}/zips_to_recommend.parquet')
 
     ## STEP 6: Split into remediation and expansion groups
 
