@@ -1030,8 +1030,8 @@ if __name__ == '__main__':
         config = yaml.safe_load(f)
 
     PREFIX = config['ENVIRONMENT']['prefix']
-    RUN_DATE = '2025-11-18' # date.today().strftime('%Y-%m-%d') # '2025-11-15'
-    RUN_DTTM = '2025-11-18 00:00:00' #datetime.today().strftime('%Y-%m-%d %H:%M:%S') # '2025-11-15 00:00:00'
+    RUN_DATE = date.today().strftime('%Y-%m-%d') # '2025-11-15'
+    RUN_DTTM = datetime.today().strftime('%Y-%m-%d %H:%M:%S') # '2025-11-15 00:00:00'
     RUN_NAME = config['EXECUTION']['run_name']
     SAVE_TO_SNOWFLAKE = config['EXECUTION']['save_to_snowflake']
     SAVE_TO_LOCAL = config['EXECUTION']['save_to_local']
