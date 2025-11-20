@@ -803,7 +803,7 @@ def get_zip_recommendation(  # pylint: disable=redefined-outer-name
     # Get DEA reason code
     zips_to_recommend_dea = generate_reason_dea(dea_df, dea_threshold)
     zips_to_recommend_dea = zips_to_recommend_dea[
-        ['zip5', 'FDXHD_unpadded_edd_dea', 'ONTRGD_unpadded_edd_dea', 
+        ['zip5', 'FDXHD_unpadded_edd_dea', 'ONTRGD_unpadded_edd_dea',
          'reason_code_dea', 'FDXHD_act_package_count', 'ONTRGD_act_package_count']
     ]
 
@@ -1030,8 +1030,8 @@ if __name__ == '__main__':
         config = yaml.safe_load(f)
 
     PREFIX = config['ENVIRONMENT']['prefix']
-    RUN_DATE = date.today().strftime('%Y-%m-%d') # '2025-11-15'
-    RUN_DTTM = datetime.today().strftime('%Y-%m-%d %H:%M:%S') # '2025-11-15 00:00:00'
+    RUN_DATE = '2025-11-18' # date.today().strftime('%Y-%m-%d') # '2025-11-15'
+    RUN_DTTM = '2025-11-18 00:00:00' #datetime.today().strftime('%Y-%m-%d %H:%M:%S') # '2025-11-15 00:00:00'
     RUN_NAME = config['EXECUTION']['run_name']
     SAVE_TO_SNOWFLAKE = config['EXECUTION']['save_to_snowflake']
     SAVE_TO_LOCAL = config['EXECUTION']['save_to_local']
@@ -1366,11 +1366,11 @@ if __name__ == '__main__':
                 },
                 inplace=False
             ),
-            'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1030;'
+            'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1026_1108;'
         )
         final_sim_df_proxy = apply_wms_proxy(
             final_sim_df,
-            'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1030;'
+            'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1026_1108;'
         )
 
         carrier_change_proxy = calculate_package_distribution_change_by_groups(
