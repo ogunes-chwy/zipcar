@@ -70,6 +70,7 @@ def get_zip_status(  # pylint: disable=redefined-outer-name
 
 
 def get_last_recommendation(  # pylint: disable=redefined-outer-name
+        prefix,
         run_date,
         run_name='default'
     ):
@@ -92,10 +93,15 @@ def get_last_recommendation(  # pylint: disable=redefined-outer-name
     output_cols = ['zip5', 'last_recommendation', 'recommendation_date',
                 'last_reason_dea', 'last_reason_shutdown', 'last_reason_backlog']
 
+    if prefix.startswith('s3://'):
+        query_path = '.'
+    else:
+        query_path = './sql'
+
     try:
         # remediation
         remediation_df = execute_query_and_return_formatted_data(
-            query_path='./sql',
+            query_path=query_path,
             query_name='get_last_remediation',
             start_date=start_date,
             end_date=end_date,
@@ -114,7 +120,7 @@ def get_last_recommendation(  # pylint: disable=redefined-outer-name
     try:
         # expansion
         expansion_df = execute_query_and_return_formatted_data(
-            query_path='./sql',
+            query_path=query_path,
             query_name='get_last_expansion',
             start_date=start_date,
             end_date=end_date,
@@ -1189,6 +1195,7 @@ if __name__ == '__main__':
 
     # last recommendation if any - based on RUN_DATE
     last_zip_recommendation = get_last_recommendation(
+        PREFIX,
         RUN_DATE,
         RUN_NAME
     )
