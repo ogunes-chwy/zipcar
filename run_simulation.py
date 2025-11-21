@@ -69,7 +69,15 @@ def generate_ship_map_file(
             sql_text = f.read()
 
     else:
-        raise ValueError(f"Invalid scenario: {scenario}")
+        try:
+            with open(
+                f"{query_path}/smf_custom.sql", 
+                encoding='utf-8'
+                ) as f:
+                sql_text = f.read()
+
+        except FileNotFoundError as exc:
+            raise ValueError(f"Invalid SMF: {scenario}") from exc
 
     # add select statement to get the SMF table
     sql_text = sql_text + 'select * from edldb_dev.sc_promise_sandbox.simulation_smf;'
@@ -141,7 +149,15 @@ def simulation(
             sql_text_smf = f.read()
 
     else:
-        raise ValueError(f"Invalid scenario: {scenario}")
+        try:
+            with open(
+                f"{query_path_smf}/smf_custom.sql", 
+                encoding='utf-8'
+                ) as f:
+                sql_text = f.read()
+
+        except FileNotFoundError as exc:
+            raise ValueError(f"Invalid SMF: {scenario}") from exc
 
     # read simulation SQL
     with open(f"{query_path}/run_simulation.sql", encoding='utf-8') as f:
