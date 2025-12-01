@@ -738,7 +738,7 @@ def calculate_priority_score(df):
     """
     Calculate priority score for zip codes based on package count and DEA metrics.
 
-    Priority score = 0.3 * (scaled package count) + 0.7 * (inverted scaled DEA)
+    Priority score = 0.7 * (scaled package count) + 0.3 * (inverted scaled DEA)
 
     Args:
         df: DataFrame containing zip codes to calculate priority score.
@@ -753,7 +753,7 @@ def calculate_priority_score(df):
         df['inverted_dea'] = 1 - df['unpadded_edd_dea_scaled']
 
         df['priority_score'] = (
-            df['act_package_count_scaled'] * 0.3 + df['inverted_dea'] * 0.7
+            df['act_package_count_scaled'] * 0.7 + df['inverted_dea'] * 0.3
         )
 
         df = df.sort_values('priority_score', ascending=False)
