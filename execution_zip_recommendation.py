@@ -656,29 +656,34 @@ def determine_final_decision(row):
 
     # If status is 0 and last is activate, then make last None
     # If status is 1 and last is deactivate, then make last None
-    if status == 0 and last == 'activate':
+    # If last decision was a switchback to usual and not executed, then make last before that
+    if status == 0 and last == 'activate' and \
+        not (last_dea == 'ok' and last_shutdown == 'ok' and last_backlog == 'ok'):
         last = 'None'
         last_dea = 'None'
         last_shutdown = 'None'
         last_backlog = 'None'
-    elif status == 1 and last == 'deactivate':
+    elif status == 1 and last == 'deactivate' and \
+        not (last_dea == 'ok' and last_shutdown == 'ok' and last_backlog == 'ok'):
         last = 'None'
+        last_dea = 'None'
+        last_shutdown = 'None'
+        last_backlog = 'None'
+    elif status == 0 and last == 'activate' and \
+        last_dea == 'ok' and last_shutdown == 'ok' and last_backlog == 'ok':
+        last = 'deactivate'
+        last_dea = 'None'
+        last_shutdown = 'None'
+        last_backlog = 'None'
+    elif status == 1 and last == 'deactivate' and \
+        last_dea == 'ok' and last_shutdown == 'ok' and last_backlog == 'ok':
+        last = 'activate'
         last_dea = 'None'
         last_shutdown = 'None'
         last_backlog = 'None'
 
     # If deactivated due to dea before, keep it deactivated
     if last in ['deactivate'] and last_dea == 'deactivate':
-        return pd.Series({
-            'final_recommendation': 'None',
-            'final_reason_dea': 'None',
-            'final_reason_shutdown': 'None',
-            'final_reason_backlog': 'None'
-        })
-
-    # If last decision was a switchback to usual
-    if last in ['activate','deactivate'] \
-        and last_dea == 'ok' and last_shutdown == 'ok' and last_backlog == 'ok':
         return pd.Series({
             'final_recommendation': 'None',
             'final_reason_dea': 'None',
@@ -693,6 +698,15 @@ def determine_final_decision(row):
             'final_reason_dea': curr_dea,
             'final_reason_shutdown': curr_shutdown,
             'final_reason_backlog': curr_backlog
+        })
+    # If last decision was a switchback to usual
+    elif last in ['activate','deactivate'] \
+        and last_dea == 'ok' and last_shutdown == 'ok' and last_backlog == 'ok':
+        return pd.Series({
+            'final_recommendation': 'None',
+            'final_reason_dea': 'None',
+            'final_reason_shutdown': 'None',
+            'final_reason_backlog': 'None'
         })
     # If current is ok and last is activate, then deactivate and reasons 'ok'
     elif curr == 'ok' and last == 'activate':
