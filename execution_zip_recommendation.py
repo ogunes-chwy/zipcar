@@ -14,7 +14,8 @@ from helper_functions import (
     read_helper,
     calculate_package_distribution_change_by_groups,
     apply_wms_proxy,
-    calculate_cost_change)
+    calculate_cost_change,
+    fillna_with_mean)
 
 # pylint: disable=abstract-class-instantiated
 
@@ -738,7 +739,7 @@ def calculate_priority_score(df):
     """
     Calculate priority score for zip codes based on package count and DEA metrics.
 
-    Priority score = 0.7 * (scaled package count) + 0.3 * (inverted scaled DEA)
+    Priority score = 0.65 * (scaled package count) + 0.25 * (inverted scaled DEA) + 0.1 * (scaled days behind)
 
     Args:
         df: DataFrame containing zip codes to calculate priority score.
@@ -748,12 +749,21 @@ def calculate_priority_score(df):
     """
     if df.shape[0] > 0:
         scaler = MinMaxScaler()
+
+        df = fillna_with_mean(df, 'act_package_count')
         df['act_package_count_scaled'] = scaler.fit_transform(df[['act_package_count']])
+
+        df = fillna_with_mean(df, 'unpadded_edd_dea')
         df['unpadded_edd_dea_scaled'] = scaler.fit_transform(df[['unpadded_edd_dea']])
         df['inverted_dea'] = 1 - df['unpadded_edd_dea_scaled']
 
+        df = fillna_with_mean(df, 'days_behind')
+        df['days_behind_scaled'] = scaler.fit_transform(df[['days_behind']])
+
         df['priority_score'] = (
-            df['act_package_count_scaled'] * 0.7 + df['inverted_dea'] * 0.3
+            df['act_package_count_scaled'] * 0.65 \
+                + df['inverted_dea'] * 0.25 \
+                    + df['days_behind_scaled'] * 0.1
         )
 
         df = df.sort_values('priority_score', ascending=False)
@@ -946,18 +956,18 @@ def get_zip_recommendation(  # pylint: disable=redefined-outer-name
 
     # Format remediation output
     zips_to_recommend_remediate = zips_to_recommend_remediate[
-        cols + ['ONTRGD_unpadded_edd_dea', 'ONTRGD_act_package_count']
+        cols + ['ONTRGD_unpadded_edd_dea', 'ONTRGD_act_package_count', 'ONTRGD_days_behind']
     ]  # ,'ONTRGD_days_behind'
     zips_to_recommend_remediate.columns = cols + [
-        'unpadded_edd_dea', 'act_package_count'
+        'unpadded_edd_dea', 'act_package_count', 'days_behind'
     ]  # ,'days_behind'
 
     # Format expansion output
     zips_to_recommend_expand = zips_to_recommend_expand[
-        cols + ['FDXHD_unpadded_edd_dea', 'FDXHD_act_package_count']
+        cols + ['FDXHD_unpadded_edd_dea', 'FDXHD_act_package_count', 'FDXHD_days_behind']
     ]  # ,'FDXHD_days_behind'
     zips_to_recommend_expand.columns = cols + [
-        'unpadded_edd_dea', 'act_package_count'
+        'unpadded_edd_dea', 'act_package_count', 'days_behind'
     ]  # ,'days_behind'
 
     ## STEP 8: Calculate priority scores and finalize outputs

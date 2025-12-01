@@ -59,6 +59,26 @@ def ensure_directory_exists(path):
         os.makedirs(path, exist_ok=True)
 
 
+# fill na with mean
+def fillna_with_mean(df, field):
+    """
+    Fill NA cells for a specific field with the average (mean) of that field.
+
+    Args:
+        df: pandas DataFrame
+        field: column name to fill NA values
+
+    Returns:
+        DataFrame with NA in the specified column filled by its mean
+    """
+    # Note: df[field].mean() will *ignore* NA cells and compute the mean of non-NA values.
+    # If all values are NA, the mean will return np.nan.
+    if field in df.columns:
+        mean_value = df[field].mean()
+        df[field] = df[field].fillna(mean_value)
+    return df
+
+
 # read helper
 def read_helper(
         path,
