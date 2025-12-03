@@ -1,11 +1,8 @@
 import os
-from pathlib import Path
 import logging
-import json
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta
 import pandas as pd
 import yaml
-from snowflake_utils import insert_data_to_snowflake,execute_query_and_return_formatted_data
 
 import helper_functions as hf
 
@@ -24,24 +21,18 @@ if __name__ == '__main__':
     with open("./configs.yaml", encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
-    CUSTOM_SCENARIO = 'remediation'
-
     PREFIX = config['ENVIRONMENT']['prefix']
-    BASELINE_SCENARIO = config['EXECUTION']['baseline_scenario']
+    BASELINE_SCENARIO = 'baseline'
+    REMEDIATION_SCENARIO = 'remediation'
+    EXPANSION_SCENARIO = 'expansion'
 
-    LOOKBACK_DAY_COUNT = config['EXECUTION']['lookback_day_count']
-    START_DATE = config['EXECUTION']['start_date']
-    END_DATE = config['EXECUTION']['end_date']
+    REMEDIATION = True
+    EXPANSION = False
+    REMEDIATION_ZIP_PATH = './analysis/adhoc-zip-remediation/2025-12-01/OnTrac-first-pass-removal-20251201.csv'
+    EXPANSION_ZIP_PATH = ''
 
-    # set start and end date for simulation data
-    if START_DATE and END_DATE:
-        pass
-    else:
-        END_DATE = date.today()
-        START_DATE = END_DATE - timedelta(days=LOOKBACK_DAY_COUNT)
-        END_DATE = END_DATE.strftime('%Y-%m-%d')
-        START_DATE = START_DATE.strftime('%Y-%m-%d')
-
+    START_DATE = '2025-11-16' # config['EXECUTION']['start_date']
+    END_DATE = '2025-11-22' # config['EXECUTION']['end_date']
 
     baseline_sim_df = hf.read_helper(
         os.path.join(f'{PREFIX}/data/simulations', BASELINE_SCENARIO),
@@ -52,6 +43,7 @@ if __name__ == '__main__':
             'units',
             'zip5',
             'sim_fc_name',
+            'cost_neutral_fc',
             'sim_carrier_code',
             'sim_route',
             'sim_tnt',
@@ -71,6 +63,7 @@ if __name__ == '__main__':
             'units',
             'zip5',
             'base_fc_name',
+            'base_cost_neutral_fc',
             'base_carrier_code',
             'base_route',
             'base_tnt',
@@ -82,14 +75,16 @@ if __name__ == '__main__':
             'std',
             'dea_flag']
     )
-    custom_sim_df = hf.read_helper(
-        os.path.join(f'{PREFIX}/data/simulations', CUSTOM_SCENARIO),
+    remediation_sim_df = hf.read_helper(
+        os.path.join(f'{PREFIX}/data/simulations', REMEDIATION_SCENARIO),
         cols=[
             'order_id',
             'order_placed_date',
             'shipment_tracking_number',
+            'units',
             'zip5',
             'sim_fc_name',
+            'cost_neutral_fc',
             'sim_carrier_code',
             'sim_route',
             'sim_tnt',
@@ -97,6 +92,73 @@ if __name__ == '__main__':
         start_date=START_DATE,
         end_date=END_DATE
     )
+    expansion_sim_df = hf.read_helper(
+        os.path.join(f'{PREFIX}/data/simulations', EXPANSION_SCENARIO),
+        cols=[
+            'order_id',
+            'order_placed_date',
+            'shipment_tracking_number',
+            'units',
+            'zip5',
+            'sim_fc_name',
+            'cost_neutral_fc',
+            'sim_carrier_code',
+            'sim_route',
+            'sim_tnt',
+            'sim_transit_cost'],
+        start_date=START_DATE,
+        end_date=END_DATE
+    )
+
+    # Cherry-pick Zips for Custom Scenarios
+    baseline_sim_df_temp = baseline_sim_df.copy()
+    custom_sim_df = pd.DataFrame()
+
+    if REMEDIATION:
+
+        # remediation zips
+        remediation_sim_zips = pd.read_csv(
+            REMEDIATION_ZIP_PATH,
+        )
+        remediation_sim_zips['zip5'] = remediation_sim_zips['zip5'].astype(int)
+        remediation_sim_zips['zip5'] = remediation_sim_zips['zip5'].astype(str)
+        remediation_sim_zips['zip5'] = remediation_sim_zips['zip5'].str.pad(5, fillchar='0')
+
+        remediation_sim_df_temp = remediation_sim_df.copy()
+        remediation_sim_df_temp = remediation_sim_df_temp.merge(remediation_sim_zips, on='zip5')
+        remediation_sim_df_temp = remediation_sim_df_temp[[
+            'order_id', 'order_placed_date', 'shipment_tracking_number','units', 'zip5', 'sim_fc_name', 'cost_neutral_fc', 'sim_carrier_code','sim_tnt', 'sim_transit_cost']
+            ]
+        custom_sim_df = pd.concat([custom_sim_df, remediation_sim_df_temp])
+        baseline_sim_df_temp = baseline_sim_df_temp.loc[
+            (~baseline_sim_df_temp['zip5'].isin(remediation_sim_zips['zip5']))
+            ]
+
+    if EXPANSION:
+        # expansion zips
+        expansion_sim_zips = pd.read_csv(
+            EXPANSION_ZIP_PATH,
+        )
+        expansion_sim_zips['zip5'] = expansion_sim_zips['zip5'].astype(int)
+        expansion_sim_zips['zip5'] = expansion_sim_zips['zip5'].astype(str)
+        expansion_sim_zips['zip5'] = expansion_sim_zips['zip5'].str.pad(5, fillchar='0')
+
+        expansion_sim_df_temp = expansion_sim_df.copy()
+        expansion_sim_df_temp = expansion_sim_df_temp.merge(expansion_sim_zips, on='zip5')
+        expansion_sim_df_temp = expansion_sim_df_temp[[
+            'order_id', 'order_placed_date', 'shipment_tracking_number','units', 'zip5', 'sim_fc_name', 'cost_neutral_fc', 'sim_carrier_code','sim_tnt', 'sim_transit_cost']
+            ]
+        custom_sim_df = pd.concat([custom_sim_df, expansion_sim_df_temp])
+        baseline_sim_df_temp = baseline_sim_df_temp.loc[
+            (~baseline_sim_df_temp['zip5'].isin(expansion_sim_zips['zip5']))
+            ]
+
+    # union all zips with different scenarios
+    baseline_sim_df_temp = baseline_sim_df_temp[
+        ['order_id', 'order_placed_date', 'shipment_tracking_number','units', 'zip5', 'base_fc_name', 'base_cost_neutral_fc', 'base_carrier_code','base_tnt', 'base_transit_cost']]
+    baseline_sim_df_temp.columns = [
+        'order_id', 'order_placed_date', 'shipment_tracking_number','units', 'zip5', 'sim_fc_name', 'cost_neutral_fc', 'sim_carrier_code','sim_tnt', 'sim_transit_cost']
+    custom_sim_df = pd.concat([custom_sim_df, baseline_sim_df_temp])
 
     # CALCULATE METRICS
 
@@ -155,7 +217,58 @@ if __name__ == '__main__':
         ),
         custom_sim_df,
         ['sim_fc_name'],
+        'units',
+        'sum'
+    )
+    fc_charge_change['change_to_baseline'] = (
+        fc_charge_change['iter_value'] - fc_charge_change['base_value'])
+    fc_charge_change['percent_change_to_baseline'] = (
+        fc_charge_change['iter_value'] - fc_charge_change['base_value']) / fc_charge_change['base_value']
+    logger.info('FC CHARGE CHANGES\n%s', fc_charge_change.to_string())
+
+    # Estimate FC Flow & FC-Carrier FLow
+    fc_carrier_flow = baseline_sim_df.merge(
+        custom_sim_df,
+        on=['order_id','shipment_tracking_number','order_placed_date','zip5','units']
+        )
+    fc_flow = hf.calculate_package_distribution_by_groups(
+        fc_carrier_flow,
+        ['base_fc_name', 'sim_fc_name'],
+        'units',
+        'sum',
+        ['base_fc_name']
+    )
+    fc_flow = fc_flow.sort_values(['base_fc_name', 'value'], ascending=[True, False])
+    fc_flow['id'] = fc_flow.groupby('base_fc_name').cumcount()
+    fc_flow = fc_flow[fc_flow['id'] < 4]
+    fc_flow = fc_flow[['base_fc_name', 'sim_fc_name', 'value','percent']]
+    logger.info('FC FLOW\n%s', fc_flow.to_string())
+
+    carrier_flow = hf.calculate_package_distribution_by_groups(
+        fc_carrier_flow,
+        ['base_fc_name','base_carrier_code','sim_fc_name','sim_carrier_code'],
+        'units',
+        'sum',
+        ['base_fc_name', 'base_carrier_code']
+    )
+    carrier_flow = carrier_flow.sort_values(
+        ['base_fc_name', 'base_carrier_code', 'value'], 
+        ascending=[True, True, False])
+    carrier_flow['id'] = carrier_flow.groupby(['base_fc_name', 'base_carrier_code']).cumcount()
+    carrier_flow = carrier_flow[carrier_flow['id'] < 4]
+    carrier_flow = carrier_flow[
+        ['base_fc_name', 'base_carrier_code', 'sim_fc_name', 'sim_carrier_code', 'value','percent']]
+    logger.info('FC CARRIER FLOW\n%s', carrier_flow.to_string())
+
+    # Estimate TnT changes
+    tnt_change = hf.calculate_package_distribution_change_by_groups(
+        baseline_sim_df.rename(
+            columns={'base_tnt': 'sim_tnt'},
+            inplace=False
+        ),
+        custom_sim_df,
+        ['sim_tnt'],
         'shipment_tracking_number',
         'nunique'
     )
-    logger.info('FC CHARGE CHANGES\n%s', fc_charge_change.to_string())
+    logger.info('TNT DIST CHANGES\n%s', tnt_change.to_string())
