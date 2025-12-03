@@ -62,9 +62,9 @@ def get_secret():
 POSTGRES_INFO = {
     'host': 'db-writer-dev-global-ors-simulations-db.scff.dev.chewy.com',
     'port': 5432,
-    'database': get_secret()["database"],
+    'database': 'orssimsdb',
     'options': '-c idle_in_transaction_session_timeout=360000000',
-    'user': 'dbs_admin',
+    'user': get_secret()["user"],
     'password': get_secret()["password"],
     'keepalives': 1,
     'keepalives_idle': 30,
@@ -216,20 +216,22 @@ def calculate_fc_charges(df, group_cols, value_col, func, denom_cols,
     return charges
 
 
-def main():
+def main(PREFIX):
     """Main execution function."""
 
     print("Loading ORS data...")
     df_ors = load_ors_data(START_DATE, END_DATE)
     df_ors = add_week_start_date(df_ors, 'date')
+    df_ors = df_ors.loc[df_ors['week_start_date'] == df_ors['week_start_date'].max()]
 
     print("Loading simulation data...")
     df_sim = hf.read_helper(
-        './data/simulations/baseline/',
+        f'{PREFIX}/data/simulations/baseline/',
         start_date=START_DATE.strftime('%Y-%m-%d'),
         end_date=END_DATE.strftime('%Y-%m-%d')
     )
     df_sim = add_week_start_date(df_sim, 'order_placed_date')
+    df_sim = df_sim.loc[df_sim['week_start_date'] == df_sim['week_start_date'].max()]
 
     print("Applying WMS proxy...")
     df_sim_wms_proxy = hf.apply_wms_proxy(df_sim, WMS_PROXY_QUERY)
@@ -397,7 +399,7 @@ if __name__ == '__main__':
     RUN_DTTM = datetime.today().strftime('%Y-%m-%d %H:%M:%S')
     OUTPUT_PATH = os.path.join(f'{PREFIX}/baseline_fidelity', RUN_DATE)
 
-    carrier_coverage_before_wms_proxy, carrier_coverage_after_wms_proxy, fc_region_charge_comp, fc_charge_comp = main()
+    carrier_coverage_before_wms_proxy, carrier_coverage_after_wms_proxy, fc_region_charge_comp, fc_charge_comp = main(PREFIX)
     carrier_coverage_before_wms_proxy['run_dttm'] = RUN_DTTM
     carrier_coverage_after_wms_proxy['run_dttm'] = RUN_DTTM
     fc_region_charge_comp['run_dttm'] = RUN_DTTM
