@@ -1397,11 +1397,11 @@ if __name__ == '__main__':
                 },
                 inplace=False
             ),
-            'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1026_1108;'
+            'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1109_1122;'
         )
         final_sim_df_proxy = apply_wms_proxy(
             final_sim_df,
-            'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1026_1108;'
+            'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1109_1122;'
         )
 
         carrier_change_proxy = calculate_package_distribution_change_by_groups(

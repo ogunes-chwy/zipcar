@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-WMS_PROXY_QUERY = 'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1026_1108;'
+WMS_PROXY_QUERY = 'select * from edldb_dev.sc_promise_sandbox.sim_wms_proxy_1109_1122;'
 
 # Date configuration
 LOOKBACK_DAY_COUNT = 7
@@ -243,7 +243,7 @@ def main(PREFIX):
     # Before WMS Proxy
     print("\n--- Before WMS Proxy ---")
     sim_carrier_coverage = calculate_carrier_coverage(
-        df_sim, 
+        df_sim,
         group_cols=['week_start_date', 'sim_carrier_code'],
         value_col='shipment_tracking_number',
         func='nunique',
@@ -405,6 +405,7 @@ if __name__ == '__main__':
     fc_region_charge_comp['run_dttm'] = RUN_DTTM
     fc_charge_comp['run_dttm'] = RUN_DTTM
 
+
     # SAVING OUTPUTS
 
     week_start_date_list = list(carrier_coverage_before_wms_proxy['week_start_date'].drop_duplicates())
@@ -468,3 +469,4 @@ if __name__ == '__main__':
             index=False,
             na_rep=''
         )
+
