@@ -154,7 +154,7 @@ def simulation(
                 f"{query_path_smf}/smf_custom.sql", 
                 encoding='utf-8'
                 ) as f:
-                sql_text = f.read()
+                sql_text_smf = f.read()
 
         except FileNotFoundError as exc:
             raise ValueError(f"Invalid SMF: {scenario}") from exc

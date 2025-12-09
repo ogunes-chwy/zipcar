@@ -1415,12 +1415,24 @@ if __name__ == '__main__':
         carrier_change_proxy.to_string())
 
         # Estimate cost saving
-        cost_saving = calculate_cost_change(
-            baseline_sim_df,
+        cost_saving_by_zip = calculate_package_distribution_change_by_groups(
+            baseline_sim_df.rename(
+                columns={'base_transit_cost': 'sim_transit_cost'},
+                inplace=False
+            ),
             final_sim_df,
+            ['zip5'],
+            'sim_transit_cost',
+            'sum'
         )
-        cost_saving = pd.DataFrame({'cost_saving_iter-base': [cost_saving]})
+        cost_saving_by_zip['cost_change'] = cost_saving_by_zip['iter_value'] \
+            - cost_saving_by_zip['base_value']
+        cost_saving_by_zip = cost_saving_by_zip[['zip5', 'base_value', 'iter_value', 'cost_change']]
+        cost_saving = pd.DataFrame(
+            {'cost_saving_iter-base': [cost_saving_by_zip['cost_change'].sum()]})
+
         logger.info('COST SAVING (ITER - BASE)\n%s', cost_saving)
+        logger.info('COST SAVING by ZIP (ITER - BASE)\n%s', cost_saving_by_zip)
 
         # Estimate FC charge changes
         fc_charge_change = calculate_package_distribution_change_by_groups(
@@ -1433,7 +1445,8 @@ if __name__ == '__main__':
             'shipment_tracking_number',
             'nunique'
         )
-        # TODO: Add FC charge change to baseline
+        
+        # Add FC charge change to baseline
         fc_charge_change['change_to_baseline'] = (
             fc_charge_change['iter_value'] - fc_charge_change['base_value'])
         fc_charge_change['percent_change_to_baseline'] = (
@@ -1499,6 +1512,8 @@ if __name__ == '__main__':
             carrier_change_proxy, execution_parameters)
         cost_saving = add_execution_parameters_to_df(
             cost_saving, execution_parameters)
+        cost_saving_by_zip = add_execution_parameters_to_df(
+            cost_saving_by_zip, execution_parameters)
         fc_charge_change = add_execution_parameters_to_df(
             fc_charge_change, execution_parameters)
         fc_flow = add_execution_parameters_to_df(
@@ -1507,22 +1522,28 @@ if __name__ == '__main__':
             carrier_flow, execution_parameters)
         final_sim_df = add_execution_parameters_to_df(
             final_sim_df, execution_parameters)
+        baseline_sim_df = add_execution_parameters_to_df(
+            baseline_sim_df, execution_parameters)
 
         carrier_change['run_dttm'] = RUN_DTTM
         carrier_change_proxy['run_dttm'] = RUN_DTTM
         cost_saving['run_dttm'] = RUN_DTTM
+        cost_saving_by_zip['run_dttm'] = RUN_DTTM
         fc_charge_change['run_dttm'] = RUN_DTTM
         fc_flow['run_dttm'] = RUN_DTTM
         carrier_flow['run_dttm'] = RUN_DTTM
         final_sim_df['run_dttm'] = RUN_DTTM
+        baseline_sim_df['run_dttm'] = RUN_DTTM
 
         carrier_change['run_name'] = RUN_NAME
         carrier_change_proxy['run_name'] = RUN_NAME
         cost_saving['run_name'] = RUN_NAME
+        cost_saving_by_zip['run_name'] = RUN_NAME
         fc_charge_change['run_name'] = RUN_NAME
         fc_flow['run_name'] = RUN_NAME
         carrier_flow['run_name'] = RUN_NAME
         final_sim_df['run_name'] = RUN_NAME
+        baseline_sim_df['run_dttm'] = RUN_DTTM
 
         # SAVE METRICS TO SNOWFLAKE
 
@@ -1544,6 +1565,11 @@ if __name__ == '__main__':
                 database='EDLDB',
                 schema='SC_PROMISE_SANDBOX')
             success, nchunks, nrows, _ = insert_data_to_snowflake(
+                df=cost_saving_by_zip,
+                table_name='ZIPCAR_COST_SAVING_BY_ZIP',
+                database='EDLDB',
+                schema='SC_PROMISE_SANDBOX')
+            success, nchunks, nrows, _ = insert_data_to_snowflake(
                 df=fc_charge_change,
                 table_name='ZIPCAR_FC_CHARGE_CHANGE',
                 database='EDLDB',
@@ -1561,6 +1587,11 @@ if __name__ == '__main__':
             success, nchunks, nrows, _ = insert_data_to_snowflake(
                 df=final_sim_df,
                 table_name='ZIPCAR_ITERATION_SIMULATION',
+                database='EDLDB',
+                schema='SC_PROMISE_SANDBOX')
+            success, nchunks, nrows, _ = insert_data_to_snowflake(
+                df=baseline_sim_df,
+                table_name='ZIPCAR_BASELINE_SIMULATION',
                 database='EDLDB',
                 schema='SC_PROMISE_SANDBOX')
 
@@ -1622,6 +1653,12 @@ if __name__ == '__main__':
                 cost_saving.to_excel(
                     writer,
                     sheet_name='cost_saving',
+                    index=False,
+                    na_rep=''
+                )
+                cost_saving_by_zip.to_excel(
+                    writer,
+                    sheet_name='cost_saving_by_zip',
                     index=False,
                     na_rep=''
                 )

@@ -14,7 +14,7 @@ with base as (
         ,adjtnt
         ,nextadjtnt
         ,generate_date
-        ,max(generate_date) over (partition by ship_date, fc, zip5, mode) as max_generate_date
+        ,max(generate_date) over (partition by ship_date, fc, zip5) as max_generate_date
     from 
         EDLDB.BT_SC_TRANSPORTATION.SHIPMAP
     where
@@ -26,17 +26,18 @@ with base as (
         and orsitemtype = 'N'
         and ship_date >= date({start_date})
         and ship_date <= dateadd('day', 3, date({end_date}))
+        --and date(generate_date) < date('2025-12-05')
 
 )
 
 , current_smf as (
     select
-        shipdate
-        ,fcname
-        ,zip5
-        ,mode
-        ,routeid
-        ,zone
+        base.shipdate
+        ,base.fcname
+        ,base.zip5
+        ,base.mode
+        ,base.routeid
+        ,base.zone
         ,concat(
             left(cast(cutoff as varchar(10)),2),
             ':',
@@ -44,57 +45,44 @@ with base as (
             ':',
             right(cast(cutoff as varchar(10)),2)
             ) as cutoff
-        ,tnt
-        ,adjtnt
-        ,nextadjtnt
+        ,base.tnt
+        ,base.adjtnt
+        ,base.nextadjtnt
     from
         base
+    left join
+        (
+            select distinct zip5, 'ONTRGD' as mode,'deactivate' as final_recommendation
+            from EDLDB_DEV.SC_PROMISE_SANDBOX.ontrgd_first_pass_removal_adhoc_20251201 
+            ) rem
+            on base.zip5 = LPAD(rem.zip5, 5, '0')
+            and base.mode = rem.mode
      -- join with custom zips here to remediate
+    /*left join
+        (
+            select distinct zip, 'ONTRGD' as mode,'deactivate' as final_recommendation
+            from EDLDB_DEV.SC_PROMISE_SANDBOX.ONTRGD_ZIP_REMOVAL_ALLFC_ADHOC_20251204 
+            ) allfc_rem
+            on base.zip5 = LPAD(allfc_rem.zip, 5, '0')
+            and base.mode = allfc_rem.mode
+    left join
+        (
+            select distinct customer_zip, fc, 'ONTRGD' as mode,'deactivate' as final_recommendation
+            from EDLDB_DEV.SC_PROMISE_SANDBOX.ONTRGD_ZIP_REMOVAL_BYFC_ADHOC_20251204 
+            ) byfc_rem
+            on base.zip5 = LPAD(byfc_rem.customer_zip, 5, '0')
+            and base.mode = byfc_rem.mode
+            and base.fcname = byfc_rem.fc */
     where
         generate_date = max_generate_date
-)
-
-, ontrgd_eligible_smf as (
-
-    select distinct
-        shipdate
-        ,fcname
-        ,zip5
-        ,mode
-        ,routeid
-        ,zone
-        ,concat(
-            left(cast(cutoff as varchar(10)),2),
-            ':',
-            SUBSTRING(cast(cutoff as varchar(10)), 3, 2),
-            ':',
-            right(cast(cutoff as varchar(10)),2)
-            ) as cutoff
-        ,tnt
-        ,adjtnt
-        ,nextadjtnt
-    from
-        edldb_dev.sc_promise_sandbox.ontrgd_eligible_zip_smf_MMruleApplied_0831_1010 smf 
-    -- join with custom zips here to expand
-    where 
-        smf.fcname != 'HOU1'
-        and shipdate >= date({start_date})
-        and shipdate <= dateadd('day', 3, date({end_date}))
+        and rem.final_recommendation is null
+        --and allfc_rem.final_recommendation is null
+        --and byfc_rem.final_recommendation is null
 )
 
     select distinct
         *
-    from (
-        (select 
-            * 
-        from 
-            current_smf)
-        UNION
-        (select 
-            *
-        from
-            ontrgd_eligible_smf)
-    )
+    from current_smf
     
     ;
 
