@@ -1445,7 +1445,7 @@ if __name__ == '__main__':
             'shipment_tracking_number',
             'nunique'
         )
-        
+
         # Add FC charge change to baseline
         fc_charge_change['change_to_baseline'] = (
             fc_charge_change['iter_value'] - fc_charge_change['base_value'])
@@ -1543,7 +1543,7 @@ if __name__ == '__main__':
         fc_flow['run_name'] = RUN_NAME
         carrier_flow['run_name'] = RUN_NAME
         final_sim_df['run_name'] = RUN_NAME
-        baseline_sim_df['run_dttm'] = RUN_DTTM
+        baseline_sim_df['run_name'] = RUN_NAME
 
         # SAVE METRICS TO SNOWFLAKE
 
