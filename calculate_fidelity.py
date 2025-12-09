@@ -86,7 +86,7 @@ def assign_fc_region(df, fc_name, fc_region_name):
     """
     df = df.copy()
     df[fc_region_name] = 'None'
-    df.loc[df[fc_name].isin(['AVP1', 'AVP2', 'MDT1']), fc_region_name] = 'East'
+    df.loc[df[fc_name].isin(['AVP1', 'AVP2', 'MDT1']), fc_region_name] = 'NorthEast'
     df.loc[df[fc_name].isin(['MCI1', 'DAY1', 'DFW1', 'CFC1', 'HOU1']), fc_region_name] = 'Central'
     df.loc[df[fc_name].isin(['BNA1', 'CLT1', 'MCO1']), fc_region_name] = 'SouthEast'
     df.loc[df[fc_name].isin(['PHX1', 'RNO1']), fc_region_name] = 'West'

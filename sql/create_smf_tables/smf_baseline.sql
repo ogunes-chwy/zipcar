@@ -14,7 +14,7 @@ with base as (
         ,adjtnt
         ,nextadjtnt
         ,generate_date
-        ,max(generate_date) over (partition by ship_date, fc, zip5, mode) as max_generate_date
+        ,max(generate_date) over (partition by ship_date, fc, zip5) as max_generate_date
     from 
         EDLDB.BT_SC_TRANSPORTATION.SHIPMAP
     where
