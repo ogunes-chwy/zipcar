@@ -1098,7 +1098,7 @@ if __name__ == '__main__':
     if START_DATE and END_DATE:
         pass
     else:
-        END_DATE = date.today()
+        END_DATE = date.today() - timedelta(days=1)
         START_DATE = END_DATE - timedelta(days=LOOKBACK_DAY_COUNT)
         END_DATE = END_DATE.strftime('%Y-%m-%d')
         START_DATE = START_DATE.strftime('%Y-%m-%d')
@@ -1182,7 +1182,7 @@ if __name__ == '__main__':
     dea_df = read_helper(
         f'{PREFIX}/data/execution_data/unpadded_dea',
         start_date=(
-            pd.to_datetime(RUN_DATE) - timedelta(days=DEA_LOOKBACK_DAY_COUNT+1))\
+            pd.to_datetime(RUN_DATE) - timedelta(days=DEA_LOOKBACK_DAY_COUNT))\
                 .strftime('%Y-%m-%d'),
         end_date=(
             pd.to_datetime(RUN_DATE) - timedelta(days=1))\
