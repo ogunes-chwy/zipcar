@@ -86,7 +86,7 @@ def get_last_recommendation(  # pylint: disable=redefined-outer-name
         pd.DataFrame: DataFrame containing previous zips to remediate and expand.
     """
     run_date = pd.to_datetime(run_date)
-    start_date = (run_date - timedelta(days=30)).strftime('%Y-%m-%d')
+    start_date = (run_date - timedelta(days=60)).strftime('%Y-%m-%d')
     end_date = run_date.strftime('%Y-%m-%d')
 
     input_cols = ['zip5', 'final_recommendation', 'run_dttm',
