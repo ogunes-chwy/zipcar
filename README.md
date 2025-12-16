@@ -1,14 +1,14 @@
 # Zip-Car
-confluence doc design: https://chewyinc.atlassian.net/wiki/x/6A9p4w
-confluence doc how to run: https://chewyinc.atlassian.net/wiki/x/RQA_-/ 
+- confluence doc design: https://chewyinc.atlassian.net/wiki/x/6A9p4w
+- confluence doc how to run: https://chewyinc.atlassian.net/wiki/x/RQA_-/ 
 
 <img width="1385" height="818" alt="image" src="https://github.com/user-attachments/assets/4a4d3da3-ce2e-43ba-91b3-a67852cbee92" />
 
 **How To Run ZipCar for Carrier-Zip Recommendations**
 
 currently, default setting in configs.yaml:
-- run simulation for baseline & remediation
-- run zip recommendation for remediation only
+- running simulation for baseline & remediation
+- running zip recommendation for remediation only
 
 running instructions:
 1. update `user` and `password` in `connection_settings` in `snowflake_utils.py` to your credentials. make sure you have SC_PROMISE_DEVELOPER_MARGIN role in SnowFlake.
