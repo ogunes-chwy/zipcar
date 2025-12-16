@@ -26,7 +26,6 @@ with base as (
         and orsitemtype = 'N'
         and ship_date >= date({start_date})
         and ship_date <= dateadd('day', 3, date({end_date}))
-        --and date(generate_date) < date('2025-12-05')
 
 )
 
@@ -58,26 +57,9 @@ with base as (
             on base.zip5 = LPAD(rem.zip5, 5, '0')
             and base.mode = rem.mode
      -- join with custom zips here to remediate
-    /*left join
-        (
-            select distinct zip, 'ONTRGD' as mode,'deactivate' as final_recommendation
-            from EDLDB_DEV.SC_PROMISE_SANDBOX.ONTRGD_ZIP_REMOVAL_ALLFC_ADHOC_20251204 
-            ) allfc_rem
-            on base.zip5 = LPAD(allfc_rem.zip, 5, '0')
-            and base.mode = allfc_rem.mode
-    left join
-        (
-            select distinct customer_zip, fc, 'ONTRGD' as mode,'deactivate' as final_recommendation
-            from EDLDB_DEV.SC_PROMISE_SANDBOX.ONTRGD_ZIP_REMOVAL_BYFC_ADHOC_20251204 
-            ) byfc_rem
-            on base.zip5 = LPAD(byfc_rem.customer_zip, 5, '0')
-            and base.mode = byfc_rem.mode
-            and base.fcname = byfc_rem.fc */
     where
         generate_date = max_generate_date
         and rem.final_recommendation is null
-        --and allfc_rem.final_recommendation is null
-        --and byfc_rem.final_recommendation is null
 )
 
     select distinct
